@@ -3,6 +3,8 @@ package tn.higer.sav_backend.security;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
+import org.springframework.core.env.Environment;
+import org.springframework.core.env.Profiles;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Component;
 import tn.higer.sav_backend.model.AppUser;
@@ -20,18 +22,24 @@ public class AdminInitializer implements CommandLineRunner {
     private final PasswordEncoder encoder;
     private final String adminEmail;
     private final String adminPassword;
+    private final boolean production;
 
     public AdminInitializer(UserRepository users, PasswordEncoder encoder,
                             @Value("${app.admin.email}") String adminEmail,
-                            @Value("${app.admin.password}") String adminPassword) {
+                            @Value("${app.admin.password}") String adminPassword,
+                            Environment environment) {
         this.users = users;
         this.encoder = encoder;
         this.adminEmail = adminEmail;
         this.adminPassword = adminPassword;
+        this.production = environment.acceptsProfiles(Profiles.of("prod"));
     }
 
     @Override
     public void run(String... args) {
+        // En production, UserSeeder est seul à créer des comptes : celui-ci ne
+        // sème que des comptes de démonstration à mot de passe connu dans le code.
+        if (production) return;
         if (users.count() > 0) return;
 
         seed(adminEmail, "Sonia Mansour", Role.ADMIN, adminOrDefault(), true);
