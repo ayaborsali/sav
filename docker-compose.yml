@@ -1,0 +1,97 @@
+# =============================================================================
+# Stack complète du portail SAV : PostgreSQL + API Spring Boot + front Angular (nginx).
+#
+#   cd sav-backend/sav-backend
+#   DB_PASSWORD=... JWT_SECRET=... MAIL_USERNAME=... MAIL_PASSWORD=... \
+#   ADMIN_PASSWORD=... docker compose up -d --build
+#
+# Les variables ci-dessous avec « :? » sont OBLIGATOIRES : compose refuse de démarrer
+# sans elles (aucun mot de passe écrit dans ce fichier). Placez-les dans un fichier
+# .env à côté de ce docker-compose.yml (non versionné) ou exportez-les.
+# =============================================================================
+
+services:
+  db:
+    image: postgres:16
+    container_name: sav-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-sav_db}
+      POSTGRES_USER: ${DB_USERNAME:-sav_user}
+      POSTGRES_PASSWORD: "${DB_PASSWORD:?DB_PASSWORD manquant - mot de passe PostgreSQL, a fournir dans un .env ou l'environnement}"
+    volumes:
+      - sav-db-data:/var/lib/postgresql/data
+    healthcheck:
+      # L'API n'est lancée qu'après ce contrôle réussi (Flyway + Hibernate validate).
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-sav_user} -d ${DB_NAME:-sav_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks:
+      - sav
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sav-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      TZ: Africa/Tunis
+      DB_URL: "jdbc:postgresql://db:5432/${DB_NAME:-sav_db}"
+      DB_USERNAME: ${DB_USERNAME:-sav_user}
+      DB_PASSWORD: "${DB_PASSWORD:?DB_PASSWORD manquant}"
+      JWT_SECRET: "${JWT_SECRET:?JWT_SECRET manquant - chaine d'au moins 32 caracteres}"
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@higerbus.tn}
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:?ADMIN_PASSWORD manquant - mot de passe du premier administrateur}"
+      MAIL_HOST: ${MAIL_HOST:-sandbox.smtp.mailtrap.io}
+      MAIL_PORT: ${MAIL_PORT:-25}
+      MAIL_USERNAME: "${MAIL_USERNAME:?MAIL_USERNAME manquant - identifiant SMTP}"
+      MAIL_PASSWORD: "${MAIL_PASSWORD:?MAIL_PASSWORD manquant - mot de passe SMTP}"
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:8081}
+      CORS_ALLOWED_ORIGIN: ${CORS_ALLOWED_ORIGIN:-http://localhost:8081}
+      # L'API est derrière nginx : l'IP utilisée par le filtre anti-force-brute vient de
+      # X-Forwarded-For (en-tête réécrit par nginx, donc non falsifiable par le client).
+      FORWARD_HEADERS_STRATEGY: framework
+      # Documentation d'API fermée par défaut dans cette stack ; SPRINGDOC_ENABLED=true pour l'ouvrir.
+      SPRINGDOC_ENABLED: ${SPRINGDOC_ENABLED:-false}
+      # Les fichiers du portail (photos de sortie, pièces jointes des documents de
+      # maintenance) sont sur le disque, jamais en base. Sans volume, ils partiraient
+      # avec le conteneur : un rebuild effacerait les BL signés scannés.
+      # STORAGE_DIR = racine ; les pièces jointes se rangent sous <racine>/attachments.
+      STORAGE_DIR: ${STORAGE_DIR:-/app/data}
+    volumes:
+      - sav-files-data:/app/data
+    ports:
+      - "${BACKEND_PORT:-8080}:8080"
+    networks:
+      - sav
+
+  frontend:
+    build:
+      # Projet Angular situé à côté de ce dépôt backend.
+      context: ../../sav-bus-higer-angular/sav-bus-higer-angular
+      dockerfile: Dockerfile
+    container_name: sav-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${FRONTEND_PORT:-8081}:80"
+    networks:
+      - sav
+
+networks:
+  sav:
+    driver: bridge
+
+volumes:
+  sav-db-data:
+  # Les fichiers produits par l'atelier : photos des sorties et pièces jointes des
+  # documents. Ce volume est une sauvegarde à faire, au même titre que la base.
+  sav-files-data:

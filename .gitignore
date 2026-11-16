@@ -1,0 +1,51 @@
+HELP.md
+target/
+.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### Secrets et configuration locale : jamais versionnés ###
+.env
+.env.*
+!.env.example
+application-local.properties
+**/application-local.properties
+*.pem
+*.p12
+
+### Fichier du portail (photos des sorties, pièces jointes des documents) ###
+# Ils vivent sur le disque du serveur, pas dans le dépôt : un scan de BL signé
+# n'a rien à faire versionné avec le code.
+/data/
+
+### Dossiers de travail locaux : profils Chrome, PDF d'essai, copies de fichiers ###
+/tmp/
+/tmp-*

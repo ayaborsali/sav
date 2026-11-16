@@ -1,0 +1,17 @@
+# Contenu à ne JAMAIS envoyer dans l'image : secrets locaux et artifacts.
+target/
+.mvn/wrapper/maven-wrapper.jar
+.env
+.env.*
+src/main/resources/application-local.properties
+**/application-local.properties
+*.jar
+*.zip
+HELP.md
+scripts/
+.vscode/
+.idea/
+*.iml
+Dockerfile
+docker-compose.yml
+docker/
