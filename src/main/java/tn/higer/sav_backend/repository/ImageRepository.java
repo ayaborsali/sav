@@ -8,4 +8,6 @@ import java.util.List;
 public interface ImageRepository extends JpaRepository<ImageEntity, String> {
 
     List<ImageEntity> findAllByOrderByUploadedAtDesc();
+
+    List<ImageEntity> findByDossierIdOrderByUploadedAtDesc(String dossierId);
 }

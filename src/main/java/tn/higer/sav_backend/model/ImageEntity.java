@@ -44,6 +44,13 @@ public class ImageEntity {
     @Column(name = "uploaded_by", length = 255)
     private String uploadedBy;
 
+    /**
+     * Le dossier de déplacement que la photo documente, facultatif : une photo
+     * versée sans dossier reste lisible, elle n'est simplement rattachée à rien.
+     */
+    @Column(name = "dossier_id", length = 50)
+    private String dossierId;
+
     /** L'image elle-même, en `bytea` PostgreSQL. */
     @JdbcTypeCode(SqlTypes.VARBINARY)
     @Column(name = "data", nullable = false, columnDefinition = "bytea")
