@@ -16,6 +16,7 @@ import tn.higer.sav_backend.dto.MissionGroupDtos.DepartRequest;
 import tn.higer.sav_backend.dto.MissionGroupDtos.DossierRequest;
 import tn.higer.sav_backend.dto.MissionGroupDtos.DossierResponse;
 import tn.higer.sav_backend.dto.MissionGroupDtos.HistoryRow;
+import tn.higer.sav_backend.dto.MissionGroupDtos.MyDossierRow;
 import tn.higer.sav_backend.dto.MissionGroupDtos.NextNumberResponse;
 import tn.higer.sav_backend.dto.MissionGroupDtos.RetourRequest;
 import tn.higer.sav_backend.service.MissionGroupService;
@@ -52,6 +53,16 @@ public class MissionGroupController {
     @GetMapping("/prochain-numero")
     public NextNumberResponse prochainNumero() {
         return new NextNumberResponse(service.prochainNumero());
+    }
+
+    /**
+     * Le suivi du téléphone : ses dossiers en cours, en lignes légères. La cloche
+     * du terrain relit cette liste souvent ; c'est pourquoi elle est courte et
+     * réservée au compte du technicien.
+     */
+    @GetMapping("/mes-dossiers")
+    public List<MyDossierRow> mesDossiers(@AuthenticationPrincipal Jwt jwt, Authentication auth) {
+        return service.mesDossiers(jwt, auth);
     }
 
     @GetMapping("/historique")

@@ -20,6 +20,13 @@ public interface MissionGroupDossierRepository extends JpaRepository<MissionGrou
     Page<MissionGroupDossier> findByTechnicianUserIdOrderByCreatedAtDesc(String technicianUserId,
                                                                          Pageable pageable);
 
+    /**
+     * Le suivi du terrain : les dossiers du technicien qui ne sont pas encore
+     * rentrés. Un dossier rentré a rendu ses comptes et n'a plus rien à annoncer.
+     */
+    List<MissionGroupDossier> findByTechnicianUserIdAndReturnedAtIsNullOrderByCreatedAtDesc(
+            String technicianUserId);
+
     boolean existsByNumberIgnoreCase(String number);
 
     /** Tous les numéros déjà écrits : le prochain se calcule dessus, sans table de compteur. */

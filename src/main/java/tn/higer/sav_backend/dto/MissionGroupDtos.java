@@ -186,4 +186,13 @@ public final class MissionGroupDtos {
 
     /** Le numéro proposé par le serveur ; l'écran peut le remplacer par celui du papier. */
     public record NextNumberResponse(String number) {}
+
+    /**
+     * Une ligne du suivi du téléphone : de quoi dire « un dossier vous est
+     * affecté » et « votre départ prévu est passé », sans tirer à chaque
+     * relecture les bus, photos et pièces jointes de chaque dossier.
+     */
+    public record MyDossierRow(String id, String number, String clientName,
+                               String createdAt, String plannedDepartureAt,
+                               String departedAt, String returnedAt) {}
 }

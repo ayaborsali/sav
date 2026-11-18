@@ -22,6 +22,7 @@ import tn.higer.sav_backend.dto.MissionGroupDtos.DepartRequest;
 import tn.higer.sav_backend.dto.MissionGroupDtos.DossierRequest;
 import tn.higer.sav_backend.dto.MissionGroupDtos.DossierResponse;
 import tn.higer.sav_backend.dto.MissionGroupDtos.HistoryRow;
+import tn.higer.sav_backend.dto.MissionGroupDtos.MyDossierRow;
 import tn.higer.sav_backend.dto.MissionGroupDtos.RetourRequest;
 import tn.higer.sav_backend.model.AppUser;
 import tn.higer.sav_backend.model.Client;
@@ -665,6 +666,28 @@ class MissionGroupServiceTest {
 
         assertTrue(service().list(pageable, jeton("usr-chef"), chef()).isEmpty());
         verify(dossiers, never()).findByTechnicianUserIdOrderByCreatedAtDesc(any(), any());
+    }
+
+    @Test
+    void le_suivi_du_telephone_rend_ses_dossiers_en_cours_en_lignes_legeres() {
+        when(dossiers.findByTechnicianUserIdAndReturnedAtIsNullOrderByCreatedAtDesc(TECH_ID))
+                .thenReturn(List.of(dossierPrepare()));
+
+        List<MyDossierRow> rows = service().mesDossiers(jeton(), technicien());
+
+        assertEquals(1, rows.size());
+        assertEquals("1740", rows.get(0).number());
+        assertEquals("SRT Sousse", rows.get(0).clientName());
+        assertEquals("2026-11-11T08:00", rows.get(0).plannedDepartureAt());
+        assertNull(rows.get(0).departedAt());
+        verify(dossiers, never()).findAllByOrderByCreatedAtDesc(any());
+    }
+
+    @Test
+    void le_suivi_du_telephone_est_ferme_a_l_atelier() {
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> service().mesDossiers(jeton("usr-chef"), chef()));
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatusCode());
     }
 
     @Test

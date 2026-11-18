@@ -19,6 +19,7 @@ import tn.higer.sav_backend.dto.MissionGroupDtos.AvailabilityResponse;
 import tn.higer.sav_backend.dto.MissionGroupDtos.DossierRequest;
 import tn.higer.sav_backend.dto.MissionGroupDtos.DossierResponse;
 import tn.higer.sav_backend.dto.MissionGroupDtos.HistoryRow;
+import tn.higer.sav_backend.dto.MissionGroupDtos.MyDossierRow;
 import tn.higer.sav_backend.dto.MissionGroupDtos.AttachmentResponse;
 import tn.higer.sav_backend.dto.MissionGroupDtos.PhotoResponse;
 import tn.higer.sav_backend.dto.MissionGroupDtos.RetourRequest;
@@ -149,6 +150,25 @@ public class MissionGroupService {
         MissionGroupDossier dossier = find(id);
         requireReaderOf(dossier, jwt, auth);
         return response(dossier);
+    }
+
+    /**
+     * Le suivi du terrain : ses dossiers non rentrés, en lignes légères. La
+     * cloche du téléphone relit souvent ; elle n'a pas besoin des bus, photos et
+     * pièces jointes pour dire qu'un dossier est arrivé ou qu'un départ prévu
+     * est passé. Aucune ligne d'un autre homme ne sort d'ici.
+     */
+    public List<MyDossierRow> mesDossiers(Jwt jwt, Authentication auth) {
+        if (!Access.isTechnician(auth)) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN,
+                    "Cette liste est celle du technicien : elle ne montre que ses propres dossiers en cours.");
+        }
+        return dossiers.findByTechnicianUserIdAndReturnedAtIsNullOrderByCreatedAtDesc(subject(jwt))
+                .stream()
+                .map(d -> new MyDossierRow(d.getId(), d.getNumber(), d.getClientName(),
+                        format(d.getCreatedAt()), format(d.getPlannedDepartureAt()),
+                        format(d.getDepartedAt()), format(d.getReturnedAt())))
+                .toList();
     }
 
     /** Le numéro suivant, calculé sur le plus grand numéro déjà écrit — jamais sur le nombre de lignes. */
