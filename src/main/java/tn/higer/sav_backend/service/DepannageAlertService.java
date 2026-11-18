@@ -74,6 +74,7 @@ public class DepannageAlertService {
     private final TechnicianRepository technicians;
     private final InterventionService visibility;
     private final AuditService audit;
+    private final PushNotificationService push;
 
     /** Sortie dehors au-delà de cette durée : le plafond déjà utilisé par le tableau du jour. */
     private final long longRunningHours;
@@ -92,6 +93,7 @@ public class DepannageAlertService {
                                  TechnicianRepository technicians,
                                  InterventionService visibility,
                                  AuditService audit,
+                                 PushNotificationService push,
                                  @Value("${app.depannage.long-running-hours:8}") long longRunningHours,
                                  @Value("${app.depannage.alert-photo-grace-minutes:60}") long photoGraceMinutes,
                                  @Value("${app.depannage.alert-return-hours:2}") long returnHours,
@@ -103,6 +105,7 @@ public class DepannageAlertService {
         this.technicians = technicians;
         this.visibility = visibility;
         this.audit = audit;
+        this.push = push;
         this.longRunningHours = longRunningHours;
         this.photoGraceMinutes = photoGraceMinutes;
         this.returnHours = returnHours;
@@ -153,7 +156,9 @@ public class DepannageAlertService {
 
             for (Map.Entry<InterventionAlertKind, String> e : fired.entrySet()) {
                 if (!alerts.existsByInterventionIdAndKindAndResolvedFalse(i.getId(), e.getKey())) {
-                    alerts.save(newAlert(i.getId(), e.getKey(), e.getValue(), now));
+                    InterventionAlert alerte = newAlert(i.getId(), e.getKey(), e.getValue(), now);
+                    alerts.save(alerte);
+                    prevenir(i, alerte);
                     created++;
                 }
             }
@@ -249,6 +254,29 @@ public class DepannageAlertService {
         a.setResolved(true);
         a.setResolvedAt(now);
         alerts.save(a);
+    }
+
+    /**
+     * Le téléphone de l'homme en sortie sonne : le temps a signalé quelque chose.
+     * La fiche technicien ne porte un compte que si l'homme en a un — sans compte,
+     * il n'a pas d'écran à ouvrir et l'atelier le prévient autrement.
+     *
+     * La notification part sur le fil de la poussée : le scan ne l'attend pas, et
+     * un téléphone qui ne répond pas ne retarde pas les autres règles.
+     */
+    private void prevenir(Intervention i, InterventionAlert alerte) {
+        if (i.getTechnicianId() == null) {
+            return;
+        }
+        Technician tech = technicians.findById(i.getTechnicianId()).orElse(null);
+        if (tech == null || tech.getUserId() == null) {
+            return;
+        }
+        push.annoncer(tech.getUserId().toString(), new PushNotificationService.Message(
+                alerte.getKind().label(),
+                "Sortie " + i.getNumber() + " : " + alerte.getMessage(),
+                "/?onglet=interventions",
+                "alerte-" + alerte.getId()));
     }
 
     // ------------------------------------------------------------------ lecture

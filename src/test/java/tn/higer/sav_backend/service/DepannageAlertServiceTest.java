@@ -66,6 +66,7 @@ class DepannageAlertServiceTest {
     @Mock private TechnicianRepository technicians;
     @Mock private InterventionService visibility;
     @Mock private AuditService audit;
+    @Mock private PushNotificationService push;
 
     private static final String ITV = "itv-1";
     private static final String TECH_ID = "tch-1";
@@ -73,13 +74,13 @@ class DepannageAlertServiceTest {
 
     /** 8 h dehors, 60 min de délai de cliché, 2 h de retour, 45 min d'affectation, tour automatique coupé. */
     private DepannageAlertService service() {
-        return new DepannageAlertService(interventions, alerts, photos, technicians, visibility, audit,
+        return new DepannageAlertService(interventions, alerts, photos, technicians, visibility, audit, push,
                 8, 60, 2, 45, false);
     }
 
     /** Idem, tour automatique ouvert : ce que laisse la propriété en production. */
     private DepannageAlertService serviceAuto() {
-        return new DepannageAlertService(interventions, alerts, photos, technicians, visibility, audit,
+        return new DepannageAlertService(interventions, alerts, photos, technicians, visibility, audit, push,
                 8, 60, 2, 45, true);
     }
 
@@ -171,6 +172,46 @@ class DepannageAlertServiceTest {
         assertFalse(stillOut.isWaived());
         assertNotNull(stillOut.getDetectedAt());
         assertTrue(stillOut.getId().startsWith("alr-"));
+    }
+
+    @Test
+    void une_alerte_qui_nait_fait_sonner_le_telephone_de_l_homme_de_la_sortie() {
+        when(interventions.findByStatusInOrderByReportedAtDesc(anyList())).thenReturn(List.of(dehors()));
+        when(photos.existsByInterventionIdAndAngle(ITV, PhotoAngle.BEFORE)).thenReturn(false);
+        when(alerts.existsByInterventionIdAndKindAndResolvedFalse(eq(ITV), any())).thenReturn(false);
+        when(alerts.findByInterventionIdAndResolvedFalse(ITV)).thenReturn(List.of());
+        when(alerts.findByResolvedFalseOrderByDetectedAtAsc()).thenReturn(List.of());
+
+        Technician fiche = team();
+        fiche.setUserId(UUID.fromString("6f0d1c1e-1111-4a2b-9c3d-000000000001"));
+        when(technicians.findById(TECH_ID)).thenReturn(Optional.of(fiche));
+
+        service().scan();
+
+        ArgumentCaptor<PushNotificationService.Message> message =
+                ArgumentCaptor.forClass(PushNotificationService.Message.class);
+        verify(push, times(2)).annoncer(
+                eq("6f0d1c1e-1111-4a2b-9c3d-000000000001"), message.capture());
+        // Une alerte ouvre l'écran des sorties, pas une fiche précise : c'est là
+        // que le technicien voit laquelle de ses sorties a été signalée.
+        assertEquals("/?onglet=interventions", message.getValue().url());
+        assertTrue(message.getValue().body().contains("DP-2026-007"), message.getValue().body());
+    }
+
+    @Test
+    void un_homme_sans_compte_ne_fait_sonner_aucun_telephone() {
+        when(interventions.findByStatusInOrderByReportedAtDesc(anyList())).thenReturn(List.of(dehors()));
+        when(photos.existsByInterventionIdAndAngle(ITV, PhotoAngle.BEFORE)).thenReturn(false);
+        when(alerts.existsByInterventionIdAndKindAndResolvedFalse(eq(ITV), any())).thenReturn(false);
+        when(alerts.findByInterventionIdAndResolvedFalse(ITV)).thenReturn(List.of());
+        when(alerts.findByResolvedFalseOrderByDetectedAtAsc()).thenReturn(List.of());
+
+        // La fiche existe, mais aucun compte du portail n'y est rattaché.
+        when(technicians.findById(TECH_ID)).thenReturn(Optional.of(team()));
+
+        service().scan();
+
+        verify(push, never()).annoncer(any(), any());
     }
 
     @Test

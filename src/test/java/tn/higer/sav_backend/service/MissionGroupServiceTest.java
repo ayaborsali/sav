@@ -89,10 +89,11 @@ class MissionGroupServiceTest {
     @Mock private InterventionRepository interventions;
     @Mock private TechnicianRepository technicians;
     @Mock private AuditService audit;
+    @Mock private PushNotificationService push;
 
     private MissionGroupService service() {
         return new MissionGroupService(dossiers, buses, photos, checklist, attachments, clients,
-                vehicles, users, serviceVehicles, interventions, technicians, audit);
+                vehicles, users, serviceVehicles, interventions, technicians, audit, push);
     }
 
     private static Jwt jeton() {
@@ -307,6 +308,22 @@ class MissionGroupServiceTest {
         verify(checklist, org.mockito.Mockito.times(2)).save(fiche.capture());
         assertEquals("Changer la bielle", fiche.getAllValues().get(0).getLabel());
         assertEquals(1, fiche.getAllValues().get(0).getPosition());
+    }
+
+    @Test
+    void le_dossier_prepare_annonce_au_telephone_de_l_homme_affecte() {
+        portefeuilleComplet();
+        when(dossiers.existsByNumberIgnoreCase("1740")).thenReturn(false);
+
+        service().creer(demande("1740", "cli-1"), jeton("usr-chef"), chef());
+
+        ArgumentCaptor<PushNotificationService.Message> message =
+                ArgumentCaptor.forClass(PushNotificationService.Message.class);
+        verify(push).annoncer(org.mockito.ArgumentMatchers.eq(TECH_ID), message.capture());
+        assertEquals("Nouveau dossier 1740", message.getValue().title());
+        assertTrue(message.getValue().url().startsWith("/?dossier="));
+        assertTrue(message.getValue().body().contains("SRT Sousse"));
+        assertTrue(message.getValue().body().contains("départ prévu"));
     }
 
     @Test

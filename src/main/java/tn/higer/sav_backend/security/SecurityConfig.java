@@ -123,6 +123,10 @@ public class SecurityConfig {
                 }
 
                 auth
+                    // Notifications poussées : chaque compte abonne SES téléphones,
+                    // et le propriétaire d'une adresse est toujours le compte du
+                    // jeton. Le technicien y entre — c'est lui qui doit sonner.
+                    .requestMatchers("/api/push/**").authenticated()
                     .requestMatchers("/api/admin/**").hasRole("ADMIN")
                     // Dépannage : module interne. Le rôle CONSULTATION (le regard du
                     // client) n'y entre pas, même en lecture — qui est parti, combien

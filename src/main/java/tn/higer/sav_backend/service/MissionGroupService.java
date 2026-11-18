@@ -53,6 +53,7 @@ import tn.higer.sav_backend.repository.VehicleRepository;
 import tn.higer.sav_backend.security.Access;
 
 import java.text.Normalizer;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -104,6 +105,7 @@ public class MissionGroupService {
     private final InterventionRepository interventions;
     private final TechnicianRepository technicians;
     private final AuditService audit;
+    private final PushNotificationService push;
 
     public MissionGroupService(MissionGroupDossierRepository dossiers,
                                MissionGroupBusRepository buses,
@@ -116,7 +118,8 @@ public class MissionGroupService {
                                ServiceVehicleRepository serviceVehicles,
                                InterventionRepository interventions,
                                TechnicianRepository technicians,
-                               AuditService audit) {
+                               AuditService audit,
+                               PushNotificationService push) {
         this.dossiers = dossiers;
         this.buses = buses;
         this.photos = photos;
@@ -129,6 +132,7 @@ public class MissionGroupService {
         this.interventions = interventions;
         this.technicians = technicians;
         this.audit = audit;
+        this.push = push;
     }
 
     // ------------------------------------------------------------------ lecture
@@ -282,6 +286,7 @@ public class MissionGroupService {
                 "Dossier " + dossier.getNumber() + " (" + ecrites.size() + " bus, fiche atelier : "
                         + fiche.size() + " lignes) pour " + client.getName() + ", "
                         + homme.getName() + " et la voiture " + voiture.getRegistration(), jwt);
+        prevenirAffectation(dossier, false);
         return response(dossier, ecrites, List.of(), fiche, List.of());
     }
 
@@ -296,6 +301,7 @@ public class MissionGroupService {
     public DossierResponse modifier(String id, DossierRequest request, Jwt jwt, Authentication auth) {
         requirePreparer(auth);
         MissionGroupDossier dossier = find(id);
+        String ancienHomme = dossier.getTechnicianUserId();
         if (dossier.getDepartedAt() != null || dossier.getReturnedAt() != null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Le dossier " + dossier.getNumber() + " est déjà parti : "
@@ -364,6 +370,11 @@ public class MissionGroupService {
                         + " bus, fiche atelier " + fiche.size() + " lignes, pour "
                         + client.getName() + ", " + homme.getName() + " et la voiture "
                         + voiture.getRegistration(), jwt);
+        // Une correction d'heure ne fait pas sonner le téléphone ; un autre homme
+        // affecté, si. L'ancien n'a plus rien à faire de ce dossier.
+        if (!Objects.equals(ancienHomme, dossier.getTechnicianUserId())) {
+            prevenirAffectation(dossier, true);
+        }
         return response(dossier, ecrites, List.of(), fiche,
                 attachments.findByDossierIdOrderByUploadedAtAsc(id));
     }
@@ -1030,6 +1041,37 @@ public class MissionGroupService {
     /** ISO sans nanosecondes : Angular lit la même heure que celle écrite sur le papier. */
     private static String format(LocalDateTime moment) {
         return moment == null ? null : moment.withNano(0).toString();
+    }
+
+    /**
+     * Le téléphone de l'homme affecté sonne : un dossier lui arrive. Le texte
+     * reste court — ce que le téléphone affiche fermé — et le toucher ouvre le
+     * dossier lui-même, pas une liste où il faudrait le retrouver.
+     */
+    private void prevenirAffectation(MissionGroupDossier dossier, boolean reaffectation) {
+        if (dossier.getTechnicianUserId() == null) {
+            return;
+        }
+        push.annoncer(dossier.getTechnicianUserId(), new PushNotificationService.Message(
+                reaffectation
+                        ? "Dossier " + dossier.getNumber() + " vous est affecté"
+                        : "Nouveau dossier " + dossier.getNumber(),
+                dossier.getClientName() + " — départ prévu " + quand(dossier.getPlannedDepartureAt()) + ".",
+                "/?dossier=" + dossier.getId(),
+                "dossier-" + dossier.getId()));
+    }
+
+    /** « aujourd'hui à 08:00 », « le 19/11 à 08:00 » : la même phrase qu'à l'écran. */
+    private static String quand(LocalDateTime moment) {
+        if (moment == null) {
+            return "à préciser";
+        }
+        String heure = String.format("%02d:%02d", moment.getHour(), moment.getMinute());
+        if (moment.toLocalDate().equals(LocalDate.now())) {
+            return "aujourd'hui à " + heure;
+        }
+        return "le " + String.format("%02d/%02d", moment.getDayOfMonth(), moment.getMonthValue())
+                + " à " + heure;
     }
 
     private static String subject(Jwt jwt) {

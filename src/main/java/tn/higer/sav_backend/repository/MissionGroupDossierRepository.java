@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
 import tn.higer.sav_backend.model.MissionGroupDossier;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 public interface MissionGroupDossierRepository extends JpaRepository<MissionGroupDossier, String> {
@@ -28,6 +29,13 @@ public interface MissionGroupDossierRepository extends JpaRepository<MissionGrou
             String technicianUserId);
 
     boolean existsByNumberIgnoreCase(String number);
+
+    /**
+     * Les dossiers dont l'heure de départ prévue est passée sans que le départ
+     * réel soit pointé — la question que la poussée repose à l'homme affecté.
+     */
+    List<MissionGroupDossier> findByReturnedAtIsNullAndDepartedAtIsNullAndPlannedDepartureAtBefore(
+            LocalDateTime seuil);
 
     /** Tous les numéros déjà écrits : le prochain se calcule dessus, sans table de compteur. */
     @Query("select d.number from MissionGroupDossier d")
