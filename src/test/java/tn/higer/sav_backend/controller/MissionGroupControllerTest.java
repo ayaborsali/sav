@@ -158,6 +158,30 @@ class MissionGroupControllerTest {
     }
 
     @Test
+    void l_annulation_transmet_le_motif_au_service() {
+        var requete = new tn.higer.sav_backend.dto.MissionGroupDtos.AnnulationRequest(
+                "bus réparé sur place");
+        DossierResponse rendu = vue();
+        Jwt jwt = jeton();
+        Authentication auth = chef();
+        when(service.annuler("mgd-1", requete, jwt, auth)).thenReturn(rendu);
+
+        assertSame(rendu, new MissionGroupController(service).annuler("mgd-1", requete, jwt, auth));
+        verify(service).annuler("mgd-1", requete, jwt, auth);
+    }
+
+    @Test
+    void la_reouverture_transmet_le_dossier_au_service() {
+        DossierResponse rendu = vue();
+        Jwt jwt = jeton();
+        Authentication auth = chef();
+        when(service.rouvrir("mgd-1", jwt, auth)).thenReturn(rendu);
+
+        assertSame(rendu, new MissionGroupController(service).rouvrir("mgd-1", jwt, auth));
+        verify(service).rouvrir("mgd-1", jwt, auth);
+    }
+
+    @Test
     void les_disponibilites_transmettent_la_periode_et_le_dossier_exclu() {
         LocalDateTime depart = LocalDateTime.of(2026, 11, 11, 8, 0);
         LocalDateTime retour = LocalDateTime.of(2026, 11, 11, 18, 0);

@@ -125,6 +125,16 @@ public class MissionGroupController {
     }
 
     /**
+     * Rouvrir un dossier annulé par erreur. Refusé si l'homme ou la voiture ont
+     * été engagés ailleurs entre-temps : le dossier reste alors annulé.
+     */
+    @PostMapping("/{id}/reouverture")
+    public DossierResponse rouvrir(@PathVariable String id,
+                                   @AuthenticationPrincipal Jwt jwt, Authentication auth) {
+        return service.rouvrir(id, jwt, auth);
+    }
+
+    /**
      * Le départ réel : l'heure et, si l'homme l'a relevé, le chiffre du compteur.
      * Les deux photos — la voiture et son compteur — doivent être versées avant,
      * sur la route des photos ; sans elles, le serveur refuse l'enregistrement.

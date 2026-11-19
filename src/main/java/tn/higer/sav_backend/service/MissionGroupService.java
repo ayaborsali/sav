@@ -437,6 +437,65 @@ public class MissionGroupService {
     }
 
     /**
+     * Rouvrir un dossier annulé par erreur. Le papier ne revient pas tout seul :
+     * entre l'annulation et aujourd'hui, l'homme ou la voiture ont pu être
+     * engagés ailleurs. Les conditions de la préparation se rejouent donc —
+     * l'homme et la voiture doivent être libres sur la période estimée, sinon
+     * le dossier reste annulé et l'atelier en prépare un autre.
+     *
+     * Le motif d'annulation ne disparaît pas du contrôle : il passe au journal,
+     * et le téléphone de l'homme reçoit de nouveau l'annonce du dossier.
+     */
+    @Transactional
+    public DossierResponse rouvrir(String id, Jwt jwt, Authentication auth) {
+        requirePreparer(auth);
+        MissionGroupDossier dossier = find(id);
+        if (dossier.getCancelledAt() == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Le dossier " + dossier.getNumber() + " n'est pas annulé : "
+                            + "il n'y a rien à rouvrir.");
+        }
+        if (dossier.getDepartedAt() != null || dossier.getReturnedAt() != null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Le dossier " + dossier.getNumber() + " est déjà parti : "
+                            + "il ne se rouvre plus.");
+        }
+
+        Occupation prise = occupation(dossier.getPlannedDepartureAt(),
+                dossier.getPlannedReturnAt(), id);
+        String hommeMotif = dossier.getTechnicianUserId() == null ? null
+                : prise.hommes().get(dossier.getTechnicianUserId());
+        if (hommeMotif != null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Le technicien « " + dossier.getTechnicianName() + " » n'est plus libre : "
+                            + hommeMotif + ". Le dossier reste annulé ; préparez-en un nouveau "
+                            + "avec un autre homme.");
+        }
+        String voitureMotif = dossier.getServiceVehicleId() == null ? null
+                : prise.voitures().get(dossier.getServiceVehicleId());
+        if (voitureMotif != null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "La voiture « " + dossier.getServiceVehicleRegistration() + " » n'est plus libre : "
+                            + voitureMotif + ". Le dossier reste annulé ; préparez-en un nouveau "
+                            + "avec une autre voiture.");
+        }
+
+        String ancienMotif = dossier.getCancelReason();
+        dossier.setCancelledAt(null);
+        dossier.setCancelReason(null);
+        dossier.setCancelledBy(null);
+        dossier.setUpdatedAt(LocalDateTime.now());
+        dossiers.save(dossier);
+
+        audit.record("REOPEN", "MISSION_GROUP_DOSSIER", dossier.getId(),
+                "Dossier " + dossier.getNumber() + " rouvert"
+                        + (ancienMotif == null ? "." : " (motif d'annulation : " + ancienMotif + ")."),
+                jwt);
+        prevenirReouverture(dossier);
+        return response(dossier);
+    }
+
+    /**
      * Ce qui est déjà pris sur une période, avec le motif à relire. Un dossier
      * rentré ne bloque plus rien ; un dossier sans période estimée est ignoré —
      * il n'a pas de fenêtre à comparer. Le dossier en cours de modification
@@ -1140,6 +1199,18 @@ public class MissionGroupService {
         push.annoncer(dossier.getTechnicianUserId(), new PushNotificationService.Message(
                 "Dossier " + dossier.getNumber() + " annulé",
                 dossier.getClientName() + " — " + dossier.getCancelReason(),
+                "/?dossier=" + dossier.getId(),
+                "dossier-" + dossier.getId()));
+    }
+
+    /** Le dossier revient : le même repère remplace l'annonce d'annulation. */
+    private void prevenirReouverture(MissionGroupDossier dossier) {
+        if (dossier.getTechnicianUserId() == null) {
+            return;
+        }
+        push.annoncer(dossier.getTechnicianUserId(), new PushNotificationService.Message(
+                "Dossier " + dossier.getNumber() + " rouvert",
+                dossier.getClientName() + " — départ prévu " + quand(dossier.getPlannedDepartureAt()) + ".",
                 "/?dossier=" + dossier.getId(),
                 "dossier-" + dossier.getId()));
     }

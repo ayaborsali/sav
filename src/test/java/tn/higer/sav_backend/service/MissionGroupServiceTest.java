@@ -1120,6 +1120,71 @@ class MissionGroupServiceTest {
     }
 
     @Test
+    void rouvrir_remet_le_dossier_en_planifiee_et_laisse_le_motif_au_journal() {
+        MissionGroupDossier dossier = dossierPrepare();
+        dossier.setPlannedReturnAt(LocalDateTime.of(2026, 11, 11, 18, 0));
+        dossier.setCancelledAt(LocalDateTime.of(2026, 11, 10, 10, 0));
+        dossier.setCancelReason("client absent");
+        dossier.setCancelledBy("chef@sav.tn");
+        lectureDossier(dossier);
+        when(dossiers.findAll()).thenReturn(List.of(dossier));
+        when(dossiers.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        DossierResponse rendu = service().rouvrir("mgd-1", jeton("usr-chef"), chef());
+
+        assertNull(dossier.getCancelledAt());
+        assertNull(dossier.getCancelReason());
+        assertNull(dossier.getCancelledBy());
+        assertEquals("prevu", rendu.state());
+        assertEquals("planifiee", rendu.status());
+
+        // Le motif d'annulation ne se perd pas : il passe au journal de contrôle.
+        verify(audit).record(org.mockito.ArgumentMatchers.eq("REOPEN"),
+                org.mockito.ArgumentMatchers.eq("MISSION_GROUP_DOSSIER"),
+                org.mockito.ArgumentMatchers.eq("mgd-1"),
+                org.mockito.ArgumentMatchers.contains("client absent"), any());
+
+        ArgumentCaptor<PushNotificationService.Message> message =
+                ArgumentCaptor.forClass(PushNotificationService.Message.class);
+        verify(push).annoncer(org.mockito.ArgumentMatchers.eq(TECH_ID), message.capture());
+        assertEquals("Dossier 1740 rouvert", message.getValue().title());
+        assertEquals("dossier-mgd-1", message.getValue().tag());
+    }
+
+    @Test
+    void rouvrir_refuse_si_l_homme_a_ete_pris_entre_temps() {
+        MissionGroupDossier annule = dossierPrepare();
+        annule.setPlannedReturnAt(LocalDateTime.of(2026, 11, 11, 18, 0));
+        annule.setCancelledAt(LocalDateTime.of(2026, 11, 10, 10, 0));
+        annule.setCancelReason("client absent");
+        MissionGroupDossier autre = dossierSurLaPeriode("mgd-2", TECH_ID, "sv-2",
+                LocalDateTime.of(2026, 11, 11, 8, 0), LocalDateTime.of(2026, 11, 11, 18, 0));
+        when(dossiers.findById("mgd-1")).thenReturn(Optional.of(annule));
+        when(dossiers.findAll()).thenReturn(List.of(annule, autre));
+
+        ResponseStatusException refus = assertThrows(ResponseStatusException.class,
+                () -> service().rouvrir("mgd-1", jeton("usr-chef"), chef()));
+
+        assertEquals(HttpStatus.CONFLICT, refus.getStatusCode());
+        assertTrue(refus.getReason().contains("n'est plus libre"), refus.getReason());
+        assertNotNull(annule.getCancelledAt(), "le dossier reste annulé");
+        verify(dossiers, never()).save(any());
+        verify(push, never()).annoncer(any(), any());
+    }
+
+    @Test
+    void rouvrir_un_dossier_qui_n_est_pas_annule_est_refuse() {
+        when(dossiers.findById("mgd-1")).thenReturn(Optional.of(dossierPrepare()));
+
+        ResponseStatusException refus = assertThrows(ResponseStatusException.class,
+                () -> service().rouvrir("mgd-1", jeton("usr-chef"), chef()));
+
+        assertEquals(HttpStatus.BAD_REQUEST, refus.getStatusCode());
+        assertTrue(refus.getReason().contains("n'est pas annulé"), refus.getReason());
+        verify(dossiers, never()).save(any());
+    }
+
+    @Test
     void une_annulation_libere_l_homme_et_la_voiture_sur_la_periode() {
         MissionGroupDossier annule = dossierSurLaPeriode("mgd-1", TECH_ID, "sv-1",
                 LocalDateTime.of(2026, 11, 11, 8, 0), LocalDateTime.of(2026, 11, 11, 18, 0));
