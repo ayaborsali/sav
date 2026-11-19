@@ -300,17 +300,17 @@ public class MissionGroupService {
      * pas pointé. Une fois parti, le papier est l'histoire du déplacement et ne
      * se réécrit plus ; une fois photographié, il porte des preuves qu'une
      * réécriture laisserait orphelines.
+     *
+     * Un dossier annulé reste corrigeable : si l'homme ou la voiture ont été
+     * engagés ailleurs entre-temps, l'atelier change l'affectation ici, puis le
+     * rouvre. La correction ne rouvre rien d'elle-même — l'annulation et son
+     * motif restent sur le dossier jusqu'au geste « Rouvrir ».
      */
     @Transactional
     public DossierResponse modifier(String id, DossierRequest request, Jwt jwt, Authentication auth) {
         requirePreparer(auth);
         MissionGroupDossier dossier = find(id);
         String ancienHomme = dossier.getTechnicianUserId();
-        if (dossier.getCancelledAt() != null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Le dossier " + dossier.getNumber() + " est annulé : "
-                            + "il ne se réécrit plus.");
-        }
         if (dossier.getDepartedAt() != null || dossier.getReturnedAt() != null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Le dossier " + dossier.getNumber() + " est déjà parti : "
@@ -381,10 +381,14 @@ public class MissionGroupService {
                 "Dossier " + dossier.getNumber() + " modifié : " + ecrites.size()
                         + " bus, fiche atelier " + fiche.size() + " lignes, pour "
                         + client.getName() + ", " + homme.getName() + " et la voiture "
-                        + voiture.getRegistration(), jwt);
+                        + voiture.getRegistration()
+                        + (dossier.getCancelledAt() == null ? ""
+                        : " (dossier annulé : l'annulation reste posée)"), jwt);
         // Une correction d'heure ne fait pas sonner le téléphone ; un autre homme
-        // affecté, si. L'ancien n'a plus rien à faire de ce dossier.
-        if (!Objects.equals(ancienHomme, dossier.getTechnicianUserId())) {
+        // affecté, si. L'ancien n'a plus rien à faire de ce dossier. Sur un
+        // dossier annulé, personne ne sonne : la réouverture préviendra.
+        if (dossier.getCancelledAt() == null
+                && !Objects.equals(ancienHomme, dossier.getTechnicianUserId())) {
             prevenirAffectation(dossier, true);
         }
         return response(dossier, ecrites, List.of(), fiche,
@@ -441,7 +445,7 @@ public class MissionGroupService {
      * entre l'annulation et aujourd'hui, l'homme ou la voiture ont pu être
      * engagés ailleurs. Les conditions de la préparation se rejouent donc —
      * l'homme et la voiture doivent être libres sur la période estimée, sinon
-     * le dossier reste annulé et l'atelier en prépare un autre.
+     * le dossier reste annulé et l'atelier corrige l'affectation, puis rouvre.
      *
      * Le motif d'annulation ne disparaît pas du contrôle : il passe au journal,
      * et le téléphone de l'homme reçoit de nouveau l'annonce du dossier.
@@ -468,16 +472,16 @@ public class MissionGroupService {
         if (hommeMotif != null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "Le technicien « " + dossier.getTechnicianName() + " » n'est plus libre : "
-                            + hommeMotif + ". Le dossier reste annulé ; préparez-en un nouveau "
-                            + "avec un autre homme.");
+                            + hommeMotif + ". Le dossier reste annulé ; corrigez l'homme ou la "
+                            + "voiture du dossier, puis rouvrez-le.");
         }
         String voitureMotif = dossier.getServiceVehicleId() == null ? null
                 : prise.voitures().get(dossier.getServiceVehicleId());
         if (voitureMotif != null) {
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "La voiture « " + dossier.getServiceVehicleRegistration() + " » n'est plus libre : "
-                            + voitureMotif + ". Le dossier reste annulé ; préparez-en un nouveau "
-                            + "avec une autre voiture.");
+                            + voitureMotif + ". Le dossier reste annulé ; corrigez l'homme ou la "
+                            + "voiture du dossier, puis rouvrez-le.");
         }
 
         String ancienMotif = dossier.getCancelReason();

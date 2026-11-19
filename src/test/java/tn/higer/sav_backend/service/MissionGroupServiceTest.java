@@ -1101,16 +1101,55 @@ class MissionGroupServiceTest {
     }
 
     @Test
-    void un_dossier_annule_ne_se_modifie_ni_ne_part_plus() {
+    void un_dossier_annule_se_corrige_encore_pour_changer_d_homme() {
+        when(clients.findById("cli-1")).thenReturn(Optional.of(client()));
+        when(vehicles.findById("veh-1")).thenReturn(Optional.of(busDuClient()));
+        when(serviceVehicles.findById("sv-1")).thenReturn(Optional.of(voiture()));
+        AppUser autre = new AppUser();
+        autre.setId(UUID.fromString(AUTRE_TECH));
+        autre.setName("Sami");
+        autre.setRole(Role.TECHNICIEN);
+        autre.setActive(true);
+        when(users.findById(UUID.fromString(AUTRE_TECH))).thenReturn(Optional.of(autre));
+
+        MissionGroupDossier dossier = dossierPrepare();
+        dossier.setPlannedReturnAt(LocalDateTime.of(2026, 11, 11, 18, 0));
+        dossier.setCancelledAt(LocalDateTime.of(2026, 11, 10, 10, 0));
+        dossier.setCancelReason("Bus réparé sur place");
+        dossier.setCancelledBy("chef@sav.tn");
+        when(dossiers.findById("mgd-1")).thenReturn(Optional.of(dossier));
+        when(buses.findByDossierIdOrderByPositionAsc("mgd-1")).thenReturn(List.of(ligne()));
+        when(checklist.findByDossierIdOrderByPositionAsc("mgd-1")).thenReturn(List.of());
+        when(photos.findByDossierIdOrderByUploadedAtAsc("mgd-1")).thenReturn(List.of());
+        when(dossiers.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        DossierRequest changement = new DossierRequest("1740", "cli-1",
+                LocalDateTime.of(2026, 11, 11, 8, 0), AUTRE_TECH, "sv-1",
+                List.of(new BusLineRequest("veh-1", "problème bielle", null)),
+                List.of("Changer la bielle"), "telephone",
+                LocalDateTime.of(2026, 11, 11, 18, 0), 45_120L, 45_500L);
+        DossierResponse rendu = service().modifier("mgd-1", changement,
+                jeton("usr-chef"), chef());
+
+        // L'affectation se corrige, l'annulation reste posée : c'est la
+        // réouverture, et elle seule, qui remet le dossier en service.
+        assertEquals(AUTRE_TECH, dossier.getTechnicianUserId());
+        assertEquals("Sami", dossier.getTechnicianName());
+        assertNotNull(dossier.getCancelledAt(), "le dossier reste annulé");
+        assertEquals("Bus réparé sur place", dossier.getCancelReason());
+        assertEquals("chef@sav.tn", dossier.getCancelledBy());
+        assertEquals("annule", rendu.state());
+        verify(dossiers).save(dossier);
+        // Pas d'annonce au nouvel homme tant que le dossier n'est pas rouvert.
+        verify(push, never()).annoncer(any(), any());
+    }
+
+    @Test
+    void un_dossier_annule_ne_part_toujours_pas() {
         MissionGroupDossier dossier = dossierPrepare();
         dossier.setCancelledAt(LocalDateTime.of(2026, 11, 10, 10, 0));
         dossier.setCancelReason("Bus réparé sur place");
         when(dossiers.findById("mgd-1")).thenReturn(Optional.of(dossier));
-
-        ResponseStatusException modif = assertThrows(ResponseStatusException.class,
-                () -> service().modifier("mgd-1", demande("1741", "cli-1"),
-                        jeton("usr-chef"), chef()));
-        assertTrue(modif.getReason().contains("annulé"), modif.getReason());
 
         ResponseStatusException depart = assertThrows(ResponseStatusException.class,
                 () -> service().depart("mgd-1",
@@ -1167,6 +1206,8 @@ class MissionGroupServiceTest {
 
         assertEquals(HttpStatus.CONFLICT, refus.getStatusCode());
         assertTrue(refus.getReason().contains("n'est plus libre"), refus.getReason());
+        assertTrue(refus.getReason().contains("corrigez l'homme ou la voiture"),
+                "le refus indique le chemin : corriger, puis rouvrir — " + refus.getReason());
         assertNotNull(annule.getCancelledAt(), "le dossier reste annulé");
         verify(dossiers, never()).save(any());
         verify(push, never()).annoncer(any(), any());
