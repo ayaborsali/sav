@@ -52,11 +52,13 @@ class MissionGroupControllerTest {
 
     private static DossierResponse vue() {
         return new DossierResponse("mgd-1", "1740", "cli-1", "SRT Sousse",
+                "Zone industrielle, Sousse", "Sousse", "73 200 100",
                 "telephone", "Téléphone",
                 "2026-11-11T08:00", "2026-11-11T18:00", 45_120L, 45_500L,
                 "usr-1", "Moez", "sv-1", "TU 1234",
                 null, null, null, null, null,
                 "prevu", "Départ prévu", "planifiee", "Planifiée",
+                null, null, null,
                 List.of(), List.of(), List.of(), false, List.of(),
                 "usr-chef", "2026-11-10T09:00");
     }

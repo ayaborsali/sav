@@ -11,6 +11,7 @@ import org.springframework.web.server.ResponseStatusException;
 import tn.higer.sav_backend.dto.MissionGroupDtos.BusDiagnosisRequest;
 import tn.higer.sav_backend.dto.MissionGroupDtos.BusLineRequest;
 import tn.higer.sav_backend.dto.MissionGroupDtos.BusResponse;
+import tn.higer.sav_backend.dto.MissionGroupDtos.AnnulationRequest;
 import tn.higer.sav_backend.dto.MissionGroupDtos.ChecklistItemResponse;
 import tn.higer.sav_backend.dto.MissionGroupDtos.CocherRequest;
 import tn.higer.sav_backend.dto.MissionGroupDtos.ConstatRequest;
@@ -167,7 +168,7 @@ public class MissionGroupService {
             throw new ResponseStatusException(HttpStatus.FORBIDDEN,
                     "Cette liste est celle du technicien : elle ne montre que ses propres dossiers en cours.");
         }
-        return dossiers.findByTechnicianUserIdAndReturnedAtIsNullOrderByCreatedAtDesc(subject(jwt))
+        return dossiers.findByTechnicianUserIdAndReturnedAtIsNullAndCancelledAtIsNullOrderByCreatedAtDesc(subject(jwt))
                 .stream()
                 .map(d -> new MyDossierRow(d.getId(), d.getNumber(), d.getClientName(),
                         format(d.getCreatedAt()), format(d.getPlannedDepartureAt()),
@@ -265,6 +266,9 @@ public class MissionGroupService {
         dossier.setNumber(number);
         dossier.setClientId(clientId);
         dossier.setClientName(client.getName());
+        dossier.setClientAddress(trim(client.getAddress()));
+        dossier.setClientCity(trim(client.getCity()));
+        dossier.setClientPhone(trim(client.getPhone()));
         dossier.setCallChannel(canal);
         dossier.setPlannedDepartureAt(request.plannedDepartureAt());
         dossier.setPlannedReturnAt(request.plannedReturnAt());
@@ -302,6 +306,11 @@ public class MissionGroupService {
         requirePreparer(auth);
         MissionGroupDossier dossier = find(id);
         String ancienHomme = dossier.getTechnicianUserId();
+        if (dossier.getCancelledAt() != null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Le dossier " + dossier.getNumber() + " est annulé : "
+                            + "il ne se réécrit plus.");
+        }
         if (dossier.getDepartedAt() != null || dossier.getReturnedAt() != null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Le dossier " + dossier.getNumber() + " est déjà parti : "
@@ -345,6 +354,9 @@ public class MissionGroupService {
         dossier.setNumber(number);
         dossier.setClientId(clientId);
         dossier.setClientName(client.getName());
+        dossier.setClientAddress(trim(client.getAddress()));
+        dossier.setClientCity(trim(client.getCity()));
+        dossier.setClientPhone(trim(client.getPhone()));
         dossier.setCallChannel(canal);
         dossier.setPlannedDepartureAt(request.plannedDepartureAt());
         dossier.setPlannedReturnAt(request.plannedReturnAt());
@@ -380,6 +392,51 @@ public class MissionGroupService {
     }
 
     /**
+     * Annuler un dossier encore à l'atelier. Une visite reportée ou une panne
+     * disparue laissait sinon l'homme et la voiture pris pour toujours : seule
+     * la rentrée rendait la place. L'annulation la rend, et le motif reste écrit
+     * sur la ligne — c'est lui qui expliquera, plus tard, pourquoi la visite
+     * préparée n'a pas eu lieu.
+     *
+     * Un dossier déjà parti ne s'annule plus : le papier est alors l'histoire
+     * d'un déplacement, et ses preuves ne se retirent pas.
+     */
+    @Transactional
+    public DossierResponse annuler(String id, AnnulationRequest request, Jwt jwt, Authentication auth) {
+        requirePreparer(auth);
+        MissionGroupDossier dossier = find(id);
+        if (dossier.getCancelledAt() != null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Le dossier " + dossier.getNumber() + " est déjà annulé"
+                            + (dossier.getCancelReason() == null ? "."
+                            : " (« " + dossier.getCancelReason() + " »)."));
+        }
+        if (dossier.getDepartedAt() != null || dossier.getReturnedAt() != null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Le dossier " + dossier.getNumber() + " est déjà parti : le papier est "
+                            + "l'histoire du déplacement, il ne s'annule plus.");
+        }
+        String motif = trim(request == null ? null : request.reason());
+        if (motif == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Un dossier ne s'annule pas sans motif : dites pourquoi la visite n'aura pas lieu. "
+                            + "Le motif restera sur le dossier et se relira au contrôle.");
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        dossier.setCancelledAt(now);
+        dossier.setCancelReason(motif);
+        dossier.setCancelledBy(jwt == null ? null : jwt.getClaimAsString("email"));
+        dossier.setUpdatedAt(now);
+        dossiers.save(dossier);
+
+        audit.record("CANCEL", "MISSION_GROUP_DOSSIER", dossier.getId(),
+                "Dossier " + dossier.getNumber() + " annulé : " + motif, jwt);
+        prevenirAnnulation(dossier);
+        return response(dossier);
+    }
+
+    /**
      * Ce qui est déjà pris sur une période, avec le motif à relire. Un dossier
      * rentré ne bloque plus rien ; un dossier sans période estimée est ignoré —
      * il n'a pas de fenêtre à comparer. Le dossier en cours de modification
@@ -411,14 +468,15 @@ public class MissionGroupService {
      *
      * Une sortie ouverte tient son homme jusqu'à sa clôture, même sans retour
      * pointé : c'est la règle de l'écran des sorties (« un homme, une sortie à
-     * la fois »), et la voiture n'est reprise qu'au retour pointé.
+     * la fois »), et la voiture n'est reprise qu'au retour pointé. Un dossier
+     * annulé ne tient plus rien : l'atelier a décidé qu'il n'aurait pas lieu.
      */
     private Occupation occupation(LocalDateTime depart, LocalDateTime retour, String excludeId) {
         Map<String, String> hommes = new LinkedHashMap<>();
         Map<String, String> voitures = new LinkedHashMap<>();
 
         for (MissionGroupDossier dossier : dossiers.findAll()) {
-            if (dossier.getReturnedAt() != null) {
+            if (dossier.getReturnedAt() != null || dossier.getCancelledAt() != null) {
                 continue;
             }
             if (excludeId != null && excludeId.equals(dossier.getId())) {
@@ -566,6 +624,11 @@ public class MissionGroupService {
     public DossierResponse depart(String id, DepartRequest request, Jwt jwt, Authentication auth) {
         MissionGroupDossier dossier = find(id);
         requireOperator(dossier, jwt, auth);
+        if (dossier.getCancelledAt() != null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Le dossier " + dossier.getNumber() + " est annulé : "
+                            + "il n'y a plus de départ à pointer.");
+        }
         if (dossier.getReturnedAt() != null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Le dossier " + dossier.getNumber() + " est déjà rentré : "
@@ -991,17 +1054,20 @@ public class MissionGroupService {
                                      List<MissionGroupAttachment> pieces) {
         boolean rentre = dossier.getReturnedAt() != null;
         boolean parti = dossier.getDepartedAt() != null;
+        boolean annule = dossier.getCancelledAt() != null;
         boolean constatComplet = !lignes.isEmpty() && lignes.stream().allMatch(this::constatEcrit);
-        String state = rentre ? "rentre" : parti ? "en_deplacement" : "prevu";
-        String stateLabel = rentre ? "Rentré — disponible"
+        String state = annule ? "annule" : rentre ? "rentre" : parti ? "en_deplacement" : "prevu";
+        String stateLabel = annule ? "Annulée"
+                : rentre ? "Rentré — disponible"
                 : parti ? "En déplacement" : "Départ prévu";
-        // Les quatre étapes du papier, déduites : rien ne s'écrit deux fois.
-        String status = rentre ? "cloturee" : !parti ? "planifiee"
+        // Les étapes du papier, déduites : rien ne s'écrit deux fois.
+        String status = annule ? "annulee" : rentre ? "cloturee" : !parti ? "planifiee"
                 : constatComplet ? "constat" : "en_cours";
-        String statusLabel = rentre ? "Clôturée" : !parti ? "Planifiée"
+        String statusLabel = annule ? "Annulée" : rentre ? "Clôturée" : !parti ? "Planifiée"
                 : constatComplet ? "Constat renseigné" : "En cours";
         return new DossierResponse(
                 dossier.getId(), dossier.getNumber(), dossier.getClientId(), dossier.getClientName(),
+                dossier.getClientAddress(), dossier.getClientCity(), dossier.getClientPhone(),
                 dossier.getCallChannel() == null ? null
                         : dossier.getCallChannel().name().toLowerCase(Locale.ROOT),
                 dossier.getCallChannel() == null ? null : dossier.getCallChannel().label(),
@@ -1012,6 +1078,7 @@ public class MissionGroupService {
                 format(dossier.getDepartedAt()), dossier.getDepartureMileage(),
                 format(dossier.getReturnedAt()), dossier.getReturnMileage(), traveled(dossier),
                 state, stateLabel, status, statusLabel,
+                format(dossier.getCancelledAt()), dossier.getCancelReason(), dossier.getCancelledBy(),
                 lignes.stream().map(b -> new BusResponse(b.getId(), b.getVehicleId(),
                         b.getRegistration(), b.getDescription(), b.getDiagnosis(),
                         b.getDefectCode(), b.getCausingPart(), b.getObservations())).toList(),
@@ -1057,6 +1124,22 @@ public class MissionGroupService {
                         ? "Dossier " + dossier.getNumber() + " vous est affecté"
                         : "Nouveau dossier " + dossier.getNumber(),
                 dossier.getClientName() + " — départ prévu " + quand(dossier.getPlannedDepartureAt()) + ".",
+                "/?dossier=" + dossier.getId(),
+                "dossier-" + dossier.getId()));
+    }
+
+    /**
+     * Le dossier n'aura pas lieu : le téléphone de l'homme affecté le dit, avec
+     * le même repère que l'affectation — la notification du dossier est
+     * remplacée, pas doublée. Sans cette annonce, l'homme partirait pour rien.
+     */
+    private void prevenirAnnulation(MissionGroupDossier dossier) {
+        if (dossier.getTechnicianUserId() == null) {
+            return;
+        }
+        push.annoncer(dossier.getTechnicianUserId(), new PushNotificationService.Message(
+                "Dossier " + dossier.getNumber() + " annulé",
+                dossier.getClientName() + " — " + dossier.getCancelReason(),
                 "/?dossier=" + dossier.getId(),
                 "dossier-" + dossier.getId()));
     }

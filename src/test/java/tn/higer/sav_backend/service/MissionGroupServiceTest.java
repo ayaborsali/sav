@@ -14,6 +14,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.server.ResponseStatusException;
+import tn.higer.sav_backend.dto.MissionGroupDtos.AnnulationRequest;
 import tn.higer.sav_backend.dto.MissionGroupDtos.BusDiagnosisRequest;
 import tn.higer.sav_backend.dto.MissionGroupDtos.BusLineRequest;
 import tn.higer.sav_backend.dto.MissionGroupDtos.CocherRequest;
@@ -56,6 +57,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -122,6 +124,9 @@ class MissionGroupServiceTest {
         Client c = new Client();
         c.setId("cli-1");
         c.setName("SRT Sousse");
+        c.setAddress("Zone industrielle, Sousse");
+        c.setCity("Sousse");
+        c.setPhone("73 200 100");
         return c;
     }
 
@@ -687,7 +692,7 @@ class MissionGroupServiceTest {
 
     @Test
     void le_suivi_du_telephone_rend_ses_dossiers_en_cours_en_lignes_legeres() {
-        when(dossiers.findByTechnicianUserIdAndReturnedAtIsNullOrderByCreatedAtDesc(TECH_ID))
+        when(dossiers.findByTechnicianUserIdAndReturnedAtIsNullAndCancelledAtIsNullOrderByCreatedAtDesc(TECH_ID))
                 .thenReturn(List.of(dossierPrepare()));
 
         List<MyDossierRow> rows = service().mesDossiers(jeton(), technicien());
@@ -997,5 +1002,136 @@ class MissionGroupServiceTest {
 
         assertEquals("1740", rendu.number(), "un numéro vide garde celui du dossier");
         verify(dossiers, never()).existsByNumberIgnoreCase(any());
+    }
+
+    // ------------------------------------------------- adresse, téléphone, annulation
+
+    @Test
+    void le_dossier_recopie_l_adresse_et_le_telephone_du_client() {
+        portefeuilleComplet();
+        when(dossiers.existsByNumberIgnoreCase("1740")).thenReturn(false);
+        when(dossiers.save(any())).thenAnswer(inv -> inv.getArgument(0));
+
+        DossierResponse rendu = service().creer(demande("1740", "cli-1"), jeton("usr-chef"), chef());
+
+        // L'adresse est figée à la préparation : modifiée au portefeuille ensuite,
+        // le dossier garde celle de la visite.
+        assertEquals("Zone industrielle, Sousse", rendu.clientAddress());
+        assertEquals("Sousse", rendu.clientCity());
+        assertEquals("73 200 100", rendu.clientPhone());
+
+        ArgumentCaptor<MissionGroupDossier> ecrit = ArgumentCaptor.forClass(MissionGroupDossier.class);
+        verify(dossiers).save(ecrit.capture());
+        assertEquals("Zone industrielle, Sousse", ecrit.getValue().getClientAddress());
+        assertEquals("Sousse", ecrit.getValue().getClientCity());
+        assertEquals("73 200 100", ecrit.getValue().getClientPhone());
+    }
+
+    @Test
+    void annuler_rend_l_homme_et_la_voiture_et_garde_le_motif() {
+        MissionGroupDossier dossier = dossierPrepare();
+        lectureDossier(dossier);
+        when(dossiers.save(any())).thenAnswer(inv -> inv.getArgument(0));
+        Jwt agent = Jwt.withTokenValue("jeton").header("alg", "HS256").subject(TECH_ID)
+                .claim("email", "chef@sav.tn")
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(3600)).build();
+
+        DossierResponse rendu = service().annuler("mgd-1",
+                new AnnulationRequest("Bus réparé sur place, sortie inutile"),
+                agent, chef());
+
+        assertEquals("annule", rendu.state());
+        assertEquals("Annulée", rendu.stateLabel());
+        assertEquals("annulee", rendu.status());
+        assertEquals("Bus réparé sur place, sortie inutile", dossier.getCancelReason());
+        assertNotNull(dossier.getCancelledAt());
+        assertEquals("chef@sav.tn", dossier.getCancelledBy(),
+                "l'auteur vient du jeton de l'agent, pas d'un champ de l'écran");
+
+        ArgumentCaptor<PushNotificationService.Message> message =
+                ArgumentCaptor.forClass(PushNotificationService.Message.class);
+        verify(push).annoncer(org.mockito.ArgumentMatchers.eq(TECH_ID), message.capture());
+        assertEquals("Dossier 1740 annulé", message.getValue().title());
+        assertEquals("dossier-mgd-1", message.getValue().tag(),
+                "le même repère que l'affectation : l'annonce se remplace, elle ne s'empile pas");
+    }
+
+    @Test
+    void un_dossier_parti_ne_s_annule_plus() {
+        when(dossiers.findById("mgd-1")).thenReturn(Optional.of(dossierParti()));
+
+        ResponseStatusException refus = assertThrows(ResponseStatusException.class,
+                () -> service().annuler("mgd-1", new AnnulationRequest("erreur de saisie"),
+                        jeton("usr-chef"), chef()));
+
+        assertEquals(HttpStatus.BAD_REQUEST, refus.getStatusCode());
+        assertTrue(refus.getReason().contains("déjà parti"), refus.getReason());
+        verify(dossiers, never()).save(any());
+        verify(push, never()).annoncer(any(), any());
+    }
+
+    @Test
+    void annuler_sans_motif_est_refuse() {
+        when(dossiers.findById("mgd-1")).thenReturn(Optional.of(dossierPrepare()));
+
+        ResponseStatusException refus = assertThrows(ResponseStatusException.class,
+                () -> service().annuler("mgd-1", new AnnulationRequest("   "),
+                        jeton("usr-chef"), chef()));
+
+        assertEquals(HttpStatus.BAD_REQUEST, refus.getStatusCode());
+        assertEquals("Un dossier ne s'annule pas sans motif : dites pourquoi la visite n'aura pas lieu. "
+                + "Le motif restera sur le dossier et se relira au contrôle.", refus.getReason());
+        verify(dossiers, never()).save(any());
+    }
+
+    @Test
+    void annuler_deux_fois_est_refuse_et_rappelle_le_motif() {
+        MissionGroupDossier dossier = dossierPrepare();
+        dossier.setCancelledAt(LocalDateTime.of(2026, 11, 10, 10, 0));
+        dossier.setCancelReason("Bus réparé sur place");
+        when(dossiers.findById("mgd-1")).thenReturn(Optional.of(dossier));
+
+        ResponseStatusException refus = assertThrows(ResponseStatusException.class,
+                () -> service().annuler("mgd-1", new AnnulationRequest("autre motif"),
+                        jeton("usr-chef"), chef()));
+
+        assertEquals(HttpStatus.BAD_REQUEST, refus.getStatusCode());
+        assertTrue(refus.getReason().contains("déjà annulé"), refus.getReason());
+        assertTrue(refus.getReason().contains("Bus réparé sur place"), refus.getReason());
+    }
+
+    @Test
+    void un_dossier_annule_ne_se_modifie_ni_ne_part_plus() {
+        MissionGroupDossier dossier = dossierPrepare();
+        dossier.setCancelledAt(LocalDateTime.of(2026, 11, 10, 10, 0));
+        dossier.setCancelReason("Bus réparé sur place");
+        when(dossiers.findById("mgd-1")).thenReturn(Optional.of(dossier));
+
+        ResponseStatusException modif = assertThrows(ResponseStatusException.class,
+                () -> service().modifier("mgd-1", demande("1741", "cli-1"),
+                        jeton("usr-chef"), chef()));
+        assertTrue(modif.getReason().contains("annulé"), modif.getReason());
+
+        ResponseStatusException depart = assertThrows(ResponseStatusException.class,
+                () -> service().depart("mgd-1",
+                        new DepartRequest(LocalDateTime.of(2026, 11, 11, 8, 15), 45_120L),
+                        jeton("usr-chef"), chef()));
+        assertTrue(depart.getReason().contains("annulé"), depart.getReason());
+    }
+
+    @Test
+    void une_annulation_libere_l_homme_et_la_voiture_sur_la_periode() {
+        MissionGroupDossier annule = dossierSurLaPeriode("mgd-1", TECH_ID, "sv-1",
+                LocalDateTime.of(2026, 11, 11, 8, 0), LocalDateTime.of(2026, 11, 11, 18, 0));
+        annule.setCancelledAt(LocalDateTime.of(2026, 11, 10, 10, 0));
+        annule.setCancelReason("Bus réparé sur place");
+        when(dossiers.findAll()).thenReturn(List.of(annule));
+
+        var dispo = service().disponibilites(
+                LocalDateTime.of(2026, 11, 11, 10, 0),
+                LocalDateTime.of(2026, 11, 11, 12, 0), null, chef());
+
+        assertTrue(dispo.busyTechnicianUserIds().isEmpty(), "l'homme est libre");
+        assertTrue(dispo.busyServiceVehicleIds().isEmpty(), "la voiture est libre");
     }
 }

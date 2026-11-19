@@ -23,9 +23,10 @@ public interface MissionGroupDossierRepository extends JpaRepository<MissionGrou
 
     /**
      * Le suivi du terrain : les dossiers du technicien qui ne sont pas encore
-     * rentrés. Un dossier rentré a rendu ses comptes et n'a plus rien à annoncer.
+     * rentrés. Un dossier rentré a rendu ses comptes et n'a plus rien à annoncer ;
+     * un dossier annulé n'a plus rien à faire dans la cloche du téléphone.
      */
-    List<MissionGroupDossier> findByTechnicianUserIdAndReturnedAtIsNullOrderByCreatedAtDesc(
+    List<MissionGroupDossier> findByTechnicianUserIdAndReturnedAtIsNullAndCancelledAtIsNullOrderByCreatedAtDesc(
             String technicianUserId);
 
     boolean existsByNumberIgnoreCase(String number);
@@ -34,7 +35,15 @@ public interface MissionGroupDossierRepository extends JpaRepository<MissionGrou
      * Les dossiers dont l'heure de départ prévue est passée sans que le départ
      * réel soit pointé — la question que la poussée repose à l'homme affecté.
      */
-    List<MissionGroupDossier> findByReturnedAtIsNullAndDepartedAtIsNullAndPlannedDepartureAtBefore(
+    List<MissionGroupDossier> findByReturnedAtIsNullAndDepartedAtIsNullAndCancelledAtIsNullAndPlannedDepartureAtBefore(
+            LocalDateTime seuil);
+
+    /**
+     * Les dossiers partis dont l'heure de retour prévue est passée sans que le
+     * retour soit pointé : la seconde question du même réveil. Sans retour prévu,
+     * il n'y a pas d'heure à comparer.
+     */
+    List<MissionGroupDossier> findByReturnedAtIsNullAndDepartedAtIsNotNullAndCancelledAtIsNullAndPlannedReturnAtBefore(
             LocalDateTime seuil);
 
     /** Tous les numéros déjà écrits : le prochain se calcule dessus, sans table de compteur. */

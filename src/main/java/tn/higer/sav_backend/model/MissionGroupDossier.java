@@ -23,6 +23,10 @@ import java.time.LocalDateTime;
  * « En déplacement » et « rentré » ne sont pas des colonnes : le premier se lit
  * sur {@link #departedAt}, le second sur {@link #returnedAt}. Écrire un état en
  * plus des dates donnerait deux vérités à tenir à jour.
+ *
+ * L'annulation, elle, s'écrit ({@link #cancelledAt}, {@link #cancelReason}) :
+ * ce n'est pas un état du voyage mais une décision de l'atelier, avec son motif.
+ * Un dossier annulé n'a ni départ ni retour et rend l'homme et la voiture.
  */
 @Entity
 @Table(name = "mission_group_dossiers")
@@ -43,6 +47,20 @@ public class MissionGroupDossier {
 
     @Column(name = "client_name", nullable = false, length = 255)
     private String clientName;
+
+    /**
+     * L'adresse, la ville et le téléphone recopiés le jour du papier. L'homme
+     * part avec l'adresse de ce jour-là : un client qui déménage plus tard ne
+     * réécrit pas un déplacement déjà fait.
+     */
+    @Column(name = "client_address", length = 255)
+    private String clientAddress;
+
+    @Column(name = "client_city", length = 255)
+    private String clientCity;
+
+    @Column(name = "client_phone", length = 255)
+    private String clientPhone;
 
     /** Par où l'appel est arrivé : téléphone, WhatsApp, email, sur place ou autre. */
     @Enumerated(EnumType.STRING)
@@ -95,6 +113,20 @@ public class MissionGroupDossier {
 
     @Column(name = "return_mileage")
     private Long returnMileage;
+
+    /**
+     * L'annulation d'un dossier préparé qui n'aura pas lieu — visite reportée,
+     * panne disparue. Rien ne s'efface : le numéro, le motif, son auteur et
+     * l'heure restent sur la ligne ; seule la disponibilité est rendue.
+     */
+    @Column(name = "cancelled_at")
+    private LocalDateTime cancelledAt;
+
+    @Column(name = "cancel_reason", length = 500)
+    private String cancelReason;
+
+    @Column(name = "cancelled_by", length = 255)
+    private String cancelledBy;
 
     @Column(name = "created_by", length = 50)
     private String createdBy;

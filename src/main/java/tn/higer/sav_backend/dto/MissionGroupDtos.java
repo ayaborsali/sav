@@ -95,6 +95,13 @@ public final class MissionGroupDtos {
     /** Cocher ou décocher une ligne de la fiche atelier. */
     public record CocherRequest(@NotNull Boolean done) {}
 
+    /**
+     * Annuler un dossier encore à l'atelier. Le motif est exigé : c'est lui qui
+     * explique, des semaines plus tard, pourquoi une visite préparée n'a pas eu
+     * lieu. Le dossier reste, avec son numéro et sa ligne.
+     */
+    public record AnnulationRequest(@NotBlank @Size(max = 500) String reason) {}
+
     public record BusResponse(String id, String vehicleId, String registration,
                               String description, String diagnosis,
                               String defectCode, String causingPart, String observations) {}
@@ -151,11 +158,15 @@ public final class MissionGroupDtos {
      * Une ligne de l'écran. {@code departedAt} reste vide tant que le technicien
      * n'a pas pointé le départ réel ; {@code traveledKm} tant que le dossier
      * n'est pas rentré. {@code stateLabel} dit où en est le pointage ;
-     * {@code status} et {@code statusLabel} portent les quatre étapes du papier —
-     * planifiée, en cours, constat renseigné, clôturée — déduites elles aussi des
-     * dates et du constat, jamais écrites.
+     * {@code status} et {@code statusLabel} portent les étapes du papier —
+     * planifiée, en cours, constat renseigné, clôturée, annulée — déduites elles
+     * aussi des dates et du motif, jamais écrites en double.
+     *
+     * L'adresse, la ville et le téléphone sont ceux recopiés le jour du papier :
+     * l'écran les affiche tels quels, il ne relit pas la fiche du client.
      */
     public record DossierResponse(String id, String number, String clientId, String clientName,
+                                  String clientAddress, String clientCity, String clientPhone,
                                   String callChannel, String callChannelLabel,
                                   String plannedDepartureAt, String plannedReturnAt,
                                   Long plannedDepartureMileage, Long plannedReturnMileage,
@@ -165,6 +176,7 @@ public final class MissionGroupDtos {
                                   String returnedAt, Long returnMileage, Long traveledKm,
                                   String state, String stateLabel,
                                   String status, String statusLabel,
+                                  String cancelledAt, String cancelReason, String cancelledBy,
                                   List<BusResponse> buses, List<PhotoResponse> photos,
                                   List<ChecklistItemResponse> checklist, boolean checklistIncomplete,
                                   List<AttachmentResponse> attachments,

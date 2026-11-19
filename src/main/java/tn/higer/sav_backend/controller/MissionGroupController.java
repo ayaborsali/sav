@@ -9,6 +9,7 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
+import tn.higer.sav_backend.dto.MissionGroupDtos.AnnulationRequest;
 import tn.higer.sav_backend.dto.MissionGroupDtos.AvailabilityResponse;
 import tn.higer.sav_backend.dto.MissionGroupDtos.CocherRequest;
 import tn.higer.sav_backend.dto.MissionGroupDtos.ConstatRequest;
@@ -109,6 +110,18 @@ public class MissionGroupController {
                                     @Valid @RequestBody DossierRequest request,
                                     @AuthenticationPrincipal Jwt jwt, Authentication auth) {
         return service.modifier(id, request, jwt, auth);
+    }
+
+    /**
+     * Annuler un dossier encore à l'atelier, avec son motif. Le dossier reste :
+     * il n'occupe plus l'homme ni la voiture, et le téléphone cesse de l'annoncer.
+     * Refusé dès que le départ réel est pointé.
+     */
+    @PostMapping("/{id}/annulation")
+    public DossierResponse annuler(@PathVariable String id,
+                                   @Valid @RequestBody AnnulationRequest request,
+                                   @AuthenticationPrincipal Jwt jwt, Authentication auth) {
+        return service.annuler(id, request, jwt, auth);
     }
 
     /**
