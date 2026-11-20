@@ -8,7 +8,9 @@ src/main/resources/application-local.properties
 *.jar
 *.zip
 HELP.md
-scripts/
+# scripts/ est copié dans l'image : ce sont les scripts Python que l'API lance
+# (lecture de la fiche atelier, EXIF, PDF). Seul le cache local est écarté.
+**/__pycache__/
 .vscode/
 .idea/
 *.iml

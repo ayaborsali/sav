@@ -1,0 +1,11 @@
+# Dépendances des scripts Python lancés par l'API.
+#
+# Versions figées sur celles du poste de développement (Python 3.12) : une
+# bibliothèque qui change sous les pieds produit un PDF différent d'un jour à
+# l'autre, ou une lecture de fiche atelier qui rend 502 sans qu'on ait rien touché.
+#
+#   read_workshop_pdf.py, verify_contrat.py -> pypdfium2 (texte des PDF)
+#   render_*.py                             -> reportlab (mise en page des PDF)
+#   read_exif.py, detect_vin.py, draft_clause.py -> bibliothèque standard seule
+pypdfium2==5.14.0
+reportlab==5.0.1

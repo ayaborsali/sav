@@ -30,9 +30,27 @@ FROM eclipse-temurin:21-jre AS runtime
 WORKDIR /app
 
 # curl : uniquement pour la sonde de santé du conteneur (/actuator/health).
+# python3 + venv : les scripts du dossier (lecture de la fiche atelier PDF, EXIF des
+# photos, mise en page des PDF) sont lancés par l'API comme processus externes. Un JRE
+# seul n'en contient pas : sans cette étape l'import de la fiche répond 503 et l'EXIF
+# des photos est ignoré (l'heure de versement sert alors de repli).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends curl python3 python3-venv \
+    && rm -rf /var/lib/apt/lists/* \
+    && python3 -m venv /opt/venv
+
+# Dépendances figées (scripts/requirements.txt). L'import final échoue à la
+# construction si une bibliothèque manque, au lieu de rendre 502 en production.
+COPY scripts/requirements.txt /tmp/requirements.txt
+RUN /opt/venv/bin/pip install --no-cache-dir -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt \
+    && /opt/venv/bin/python -c "import pypdfium2.raw, reportlab"
+
+# Le « python » trouvé dans le PATH est celui du venv : app.python.executable garde
+# sa valeur par défaut (« python »), sans variable à poser sur l'hébergeur.
+ENV PATH="/opt/venv/bin:${PATH}"
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 
 # Utilisateur dédié, sans droits particuliers.
 RUN groupadd --system spring && useradd --system --gid spring --home-dir /app spring
@@ -44,6 +62,9 @@ RUN groupadd --system spring && useradd --system --gid spring --home-dir /app sp
 RUN mkdir -p /app/data && chown -R spring:spring /app
 
 COPY --from=build --chown=spring:spring /build/target/*.jar app.jar
+# Les scripts Python attendus par application.properties (./scripts/...), lus depuis
+# le dossier de travail /app.
+COPY --chown=spring:spring scripts ./scripts
 
 USER spring
 EXPOSE 8080
