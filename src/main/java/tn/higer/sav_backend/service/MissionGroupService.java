@@ -7,6 +7,8 @@ import org.springframework.security.core.Authentication;
 import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.server.ResponseStatusException;
 import tn.higer.sav_backend.dto.MissionGroupDtos.BusDiagnosisRequest;
 import tn.higer.sav_backend.dto.MissionGroupDtos.BusLineRequest;
@@ -290,7 +292,7 @@ public class MissionGroupService {
                 "Dossier " + dossier.getNumber() + " (" + ecrites.size() + " bus, fiche atelier : "
                         + fiche.size() + " lignes) pour " + client.getName() + ", "
                         + homme.getName() + " et la voiture " + voiture.getRegistration(), jwt);
-        prevenirAffectation(dossier, false);
+        apresValidation(() -> prevenirAffectation(dossier, false));
         return response(dossier, ecrites, List.of(), fiche, List.of());
     }
 
@@ -298,8 +300,10 @@ public class MissionGroupService {
      * Modifier un dossier encore à l'atelier : le client, ses bus, l'homme, la
      * voiture et la période estimée se réécrivent tant que le départ réel n'est
      * pas pointé. Une fois parti, le papier est l'histoire du déplacement et ne
-     * se réécrit plus ; une fois photographié, il porte des preuves qu'une
-     * réécriture laisserait orphelines.
+     * se réécrit plus. Une photo de bus, elle, est accrochée à une ligne que la
+     * correction recrée : tant qu'il en existe une, le dossier reste tel quel.
+     * Les photos de la voiture ne gênent pas la correction — elles ne désignent
+     * aucune ligne.
      *
      * Un dossier annulé reste corrigeable : si l'homme ou la voiture ont été
      * engagés ailleurs entre-temps, l'atelier change l'affectation ici, puis le
@@ -316,10 +320,11 @@ public class MissionGroupService {
                     "Le dossier " + dossier.getNumber() + " est déjà parti : "
                             + "le papier préparé ne se modifie plus.");
         }
-        if (!photos.findByDossierIdOrderByUploadedAtAsc(id).isEmpty()) {
+        if (photos.existsByDossierIdAndBusIdIsNotNull(id)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Le dossier " + dossier.getNumber() + " porte déjà des photos : "
-                            + "il ne se modifie plus.");
+                    "Le dossier " + dossier.getNumber() + " porte des photos de bus : "
+                            + "la correction recrée les lignes de bus et laisserait ces preuves "
+                            + "sans support. Le dossier reste tel quel.");
         }
         String clientId = trim(request.clientId());
         if (clientId == null) {
@@ -389,7 +394,7 @@ public class MissionGroupService {
         // dossier annulé, personne ne sonne : la réouverture préviendra.
         if (dossier.getCancelledAt() == null
                 && !Objects.equals(ancienHomme, dossier.getTechnicianUserId())) {
-            prevenirAffectation(dossier, true);
+            apresValidation(() -> prevenirAffectation(dossier, true));
         }
         return response(dossier, ecrites, List.of(), fiche,
                 attachments.findByDossierIdOrderByUploadedAtAsc(id));
@@ -465,6 +470,7 @@ public class MissionGroupService {
                             + "il ne se rouvre plus.");
         }
 
+        verrouillerAffectation(dossier.getTechnicianUserId(), dossier.getServiceVehicleId());
         Occupation prise = occupation(dossier.getPlannedDepartureAt(),
                 dossier.getPlannedReturnAt(), id);
         String hommeMotif = dossier.getTechnicianUserId() == null ? null
@@ -495,7 +501,7 @@ public class MissionGroupService {
                 "Dossier " + dossier.getNumber() + " rouvert"
                         + (ancienMotif == null ? "." : " (motif d'annulation : " + ancienMotif + ")."),
                 jwt);
-        prevenirReouverture(dossier);
+        apresValidation(() -> prevenirReouverture(dossier));
         return response(dossier);
     }
 
@@ -827,6 +833,11 @@ public class MissionGroupService {
                                    Jwt jwt, Authentication auth) {
         MissionGroupDossier dossier = find(id);
         requireOperator(dossier, jwt, auth);
+        if (dossier.getCancelledAt() != null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Le dossier " + dossier.getNumber() + " est annulé : "
+                            + "il n'y a plus de constat à écrire.");
+        }
         MissionGroupBus ligne = buses.findByDossierIdOrderByPositionAsc(id).stream()
                 .filter(b -> Objects.equals(b.getId(), busId))
                 .findFirst()
@@ -858,6 +869,11 @@ public class MissionGroupService {
                                   Jwt jwt, Authentication auth) {
         MissionGroupDossier dossier = find(id);
         requireOperator(dossier, jwt, auth);
+        if (dossier.getCancelledAt() != null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Le dossier " + dossier.getNumber() + " est annulé : "
+                            + "la fiche ne se coche plus.");
+        }
         MissionGroupChecklistItem item = checklist.findByDossierIdOrderByPositionAsc(id).stream()
                 .filter(i -> Objects.equals(i.getId(), itemId))
                 .findFirst()
@@ -891,7 +907,7 @@ public class MissionGroupService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "L'homme affecté n'est pas un compte du portail : rechoisissez-le dans la liste.");
         }
-        AppUser homme = users.findById(compte)
+        AppUser homme = users.findByIdForUpdate(compte)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "Ce compte n'existe pas : rechoisissez l'homme dans la liste."));
         if (homme.getRole() != Role.TECHNICIEN || !homme.isActive()) {
@@ -902,7 +918,7 @@ public class MissionGroupService {
     }
 
     private ServiceVehicle findVehicle(String rawVehicleId) {
-        ServiceVehicle voiture = serviceVehicles.findById(trim(rawVehicleId))
+        ServiceVehicle voiture = serviceVehicles.findByIdForUpdate(trim(rawVehicleId))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "Cette voiture de déplacement n'existe pas : rechoisissez-la dans la liste."));
         if (!voiture.isActive()) {
@@ -911,6 +927,24 @@ public class MissionGroupService {
                             + "rechoisissez-en une autre.");
         }
         return voiture;
+    }
+
+    /**
+     * Tient l'homme puis la voiture jusqu'à la validation, toujours dans cet
+     * ordre : deux préparations croisées ne s'attendent pas en rond. Un compte
+     * disparu ne se tient pas — plus personne ne peut l'affecter.
+     */
+    private void verrouillerAffectation(String technicianUserId, String serviceVehicleId) {
+        if (technicianUserId != null) {
+            try {
+                users.findByIdForUpdate(UUID.fromString(technicianUserId));
+            } catch (IllegalArgumentException compteEfface) {
+                // Le dossier garde un nom, pas une ligne à verrouiller.
+            }
+        }
+        if (serviceVehicleId != null) {
+            serviceVehicles.findByIdForUpdate(serviceVehicleId);
+        }
     }
 
     /**
@@ -1171,6 +1205,24 @@ public class MissionGroupService {
     /** ISO sans nanosecondes : Angular lit la même heure que celle écrite sur le papier. */
     private static String format(LocalDateTime moment) {
         return moment == null ? null : moment.withNano(0).toString();
+    }
+
+    /**
+     * L'annonce part après la validation, pas pendant : un envoi lent ne retient
+     * ni la transaction ni le verrou de l'homme et de la voiture. Hors transaction
+     * (tests unitaires), le geste s'exécute tout de suite.
+     */
+    private void apresValidation(Runnable action) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            action.run();
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                action.run();
+            }
+        });
     }
 
     /**

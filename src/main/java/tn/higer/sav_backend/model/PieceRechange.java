@@ -69,6 +69,15 @@ public class PieceRechange {
     @Column(nullable = false, unique = true, length = 160)
     private String reference;
 
+    /**
+     * Le numéro que le fournisseur imprime sur sa boîte. Il vit à part de
+     * {@link #reference} : c'est la référence Higer qu'on redemande au constructeur
+     * et c'est elle qui décide de l'unicité. Facultatif — vide veut dire « pas
+     * encore renseigné ».
+     */
+    @Column(name = "reference_fournisseur", length = 160)
+    private String referenceFournisseur;
+
     @Column(name = "designation_fr", nullable = false, length = 300)
     private String designationFr;
 
@@ -102,6 +111,16 @@ public class PieceRechange {
 
     @Column(length = 160)
     private String fournisseur;
+
+    /**
+     * Le prix qu'un atelier concurrent annonce pour la même pièce, en dinars. Un
+     * renseignement de marché, pas un troisième prix : il ne remplace ni le revient
+     * ni la vente, et l'écran le signale en rouge quand il passe sous notre vente.
+     * Facultatif, jamais zéro (la CHECK de V59) — zéro se lirait « le moins cher
+     * du marché » alors que la case n'a simplement pas été remplie.
+     */
+    @Column(name = "prix_competiteur", precision = 12, scale = 3)
+    private BigDecimal prixCompetiteur;
 
     /**
      * La famille de la pièce — le « type PR » de l'atelier. Une seule, obligatoire,

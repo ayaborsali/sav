@@ -64,10 +64,17 @@ class PieceCatalogImportServiceTest {
     private final PieceCatalogService catalogue = Mockito.mock(PieceCatalogService.class);
     private final PieceCatalogImportService importService = new PieceCatalogImportService(catalogue);
 
-    /** Les entêtes du modèle, dans l'ordre où le classeur les écrit. */
+    /**
+     * Les colonnes du modèle, dans l'ordre où l'import les cherche. L'ordre n'est
+     * pas une règle du lecteur — chaque colonne se reconnaît à son nom — mais les
+     * deux nouvelles colonnes se placent au bout pour ne pas déplacer les essais
+     * qui écrivent leurs lignes en positionnel. Leur ordre réel dans le modèle est
+     * vérifié par son propre test, et leur lecture sans vol de colonne aussi.
+     */
     private static final String[] ENTETE = {
             "Référence", "Désignation FR", "Désignation EN", "Famille", "Prix Ex Works", "Devise",
-            "Fournisseur", "Coefficient de revient", "Coefficient de vente"};
+            "Fournisseur", "Coefficient de revient", "Coefficient de vente", "Réf. fournisseur",
+            "Prix compétiteur"};
 
     private static Workbook classeur(String... lignes) {
         XSSFWorkbook workbook = new XSSFWorkbook();
@@ -79,7 +86,18 @@ class PieceCatalogImportServiceTest {
         return workbook;
     }
 
-    /** Une ligne au format du modèle : neuf cases séparées par « | », une case vide se dit « ». */
+    /** Le même classeur avec l'entête qu'on choisit : l'ordre du modèle, ou un ordre bancal. */
+    private static Workbook classeurAvecEntete(List<String> entete, String... lignes) {
+        XSSFWorkbook workbook = new XSSFWorkbook();
+        Sheet sheet = workbook.createSheet("Pieces");
+        row(sheet, 0, String.join("|", entete));
+        for (int r = 0; r < lignes.length; r++) {
+            row(sheet, r + 1, lignes[r]);
+        }
+        return workbook;
+    }
+
+    /** Une ligne au format du modèle : une case par colonne, séparées par « | », une case vide se dit « ». */
     private static void row(Sheet sheet, int index, String valeurs) {
         Row row = sheet.createRow(index);
         String[] cases = valeurs.split("\\|", -1);
@@ -605,11 +623,11 @@ class PieceCatalogImportServiceTest {
     void confirmerEnregistreLigneParLigneEtCompteCeQuiABouge() {
         Mockito.when(catalogue.upsertFromImport(any(), any())).thenReturn(true, false);
         PieceImportLine neuf = PieceImportLine.of(2, new PieceRequest(
-                "9.8001.045", "Filtre à gasoil", null, "MECANIQUE", new BigDecimal("86.500"),
-                new BigDecimal("1.7200"), new BigDecimal("1.5000"), null, null), false);
+                "9.8001.045", null, "Filtre à gasoil", null, "MECANIQUE", new BigDecimal("86.500"),
+                new BigDecimal("1.7200"), new BigDecimal("1.5000"), null, null, null), false);
         PieceImportLine existant = PieceImportLine.of(3, new PieceRequest(
-                "2115U-001", "Plaquette de frein AV", null, "FREINAGE", new BigDecimal("124.380"),
-                new BigDecimal("1.6800"), new BigDecimal("1.4000"), null, null), true);
+                "2115U-001", null, "Plaquette de frein AV", null, "FREINAGE", new BigDecimal("124.380"),
+                new BigDecimal("1.6800"), new BigDecimal("1.4000"), null, null, null), true);
 
         PieceImportSummary resume = importService.confirmer(
                 new PieceImportCommit(List.of(neuf, existant)), null);
@@ -644,8 +662,8 @@ class PieceCatalogImportServiceTest {
 
         PieceImportSummary resume = importService.confirmer(new PieceImportCommit(List.of(
                 PieceImportLine.of(2, new PieceRequest(
-                        "X", "Pièce", null, "DIVERS", new BigDecimal("1.000"),
-                        new BigDecimal("1.7200"), new BigDecimal("1.5000"), null, null), false))), null);
+                        "X", null, "Pièce", null, "DIVERS", new BigDecimal("1.000"),
+                        new BigDecimal("1.7200"), new BigDecimal("1.5000"), null, null, null), false))), null);
 
         assertEquals(1, resume.refusees());
         assertEquals(0, resume.ajoutees());
@@ -660,14 +678,67 @@ class PieceCatalogImportServiceTest {
             Sheet pieces = workbook.getSheet("Pieces");
             assertEquals(0, pieces.getLastRowNum(),
                     "La feuille de saisie ne porte QUE l'entête : un exemple importé serait une pièce fausse au catalogue.");
-            assertEquals("Référence", pieces.getRow(0).getCell(0).getStringCellValue());
-            assertEquals("Famille", pieces.getRow(0).getCell(3).getStringCellValue());
-            assertEquals("Coefficient de revient", pieces.getRow(0).getCell(7).getStringCellValue());
-            assertEquals("Coefficient de vente", pieces.getRow(0).getCell(8).getStringCellValue());
-            assertEquals(9, pieces.getRow(0).getLastCellNum(),
-                    "Le modèle porte UNE famille et DEUX coefficients (revient, vente), aucun prix calculé.");
+            assertEquals("Réf. Higer", pieces.getRow(0).getCell(0).getStringCellValue());
+            assertEquals("Réf. fournisseur", pieces.getRow(0).getCell(1).getStringCellValue());
+            assertEquals("Famille", pieces.getRow(0).getCell(4).getStringCellValue());
+            assertEquals("Nom fournisseur", pieces.getRow(0).getCell(7).getStringCellValue());
+            assertEquals("Prix compétiteur", pieces.getRow(0).getCell(8).getStringCellValue());
+            assertEquals("Coefficient de revient", pieces.getRow(0).getCell(9).getStringCellValue());
+            assertEquals("Coefficient de vente", pieces.getRow(0).getCell(10).getStringCellValue());
+            assertEquals(11, pieces.getRow(0).getLastCellNum(),
+                    "Le modèle porte ses deux références, son fournisseur, le prix du compétiteur et DEUX coefficients, aucun prix calculé.");
             assertNotNull(workbook.getSheet("Notice"));
             assertNotNull(workbook.getSheet("Exemple"));
         }
+    }
+
+    /**
+     * Les deux colonnes de la demande de l'atelier, et le piège qu'elles posent :
+     * « Référence fournisseur » commence par « référence » et « Prix compétiteur »
+     * par « prix ». Prises l'une pour l'autre, la clé d'unicité du catalogue
+     * deviendrait le numéro de la boîte et le prix de revient sortirait du prix du
+     * concurrent. L'entête est écrite dans l'ordre EXACT du modèle, exprès.
+     */
+    @Test
+    void laReferenceFournisseurEtLePrixCompetiteurSeLisentSansVolerLesColonnesDuCatalogue() {
+        PieceImportPreview apercu = apercu(classeurAvecEntete(
+                List.of("Réf. Higer", "Réf. fournisseur", "Désignation FR", "Désignation EN", "Famille",
+                        "Prix Ex Works", "Devise", "Nom fournisseur", "Prix compétiteur",
+                        "Coefficient de revient", "Coefficient de vente"),
+                "9.8001.045|HF-8045|Filtre à gasoil|Fuel filter|Mécanique|86,500|EUR|Higer Parts|289,000|1,7200|1,5000",
+                "2115U-001||Plaquette de frein AV||Freinage|124,380|EUR|Higer Parts||1,6800|1,4000"),
+                null);
+
+        assertTrue(apercu.canImporter(), () -> "Refus inattendus : " + apercu.erreurs());
+        assertEquals(2, apercu.lignesValides());
+
+        PieceImportLine premiere = apercu.lignes().get(0);
+        assertEquals("9.8001.045", premiere.reference(),
+                "La référence Higer reste la référence, même avec une colonne « Réf. fournisseur » à côté.");
+        assertEquals("HF-8045", premiere.referenceFournisseur());
+        assertEquals(new BigDecimal("86.500"), premiere.prixExWorks(),
+                "Le prix Ex Works n'est pas le prix du compétiteur.");
+        assertEquals("Higer Parts", premiere.fournisseur());
+        assertEquals(new BigDecimal("289.000"), premiere.prixCompetiteur());
+
+        // Une case vide n'est pas un refus : c'est « pas renseigné ».
+        PieceImportLine seconde = apercu.lignes().get(1);
+        assertNull(seconde.referenceFournisseur());
+        assertNull(seconde.prixCompetiteur());
+    }
+
+    @Test
+    void unPrixCompetiteurIllisibleOuNulRefuseSaLigneAuLieuDEcrireUnFauxConcurrent() {
+        PieceImportPreview apercu = apercu(classeur(
+                "9.8001.045|Filtre à gasoil|Fuel filter|Mécanique|86,500|EUR|Higer Parts|1,7200|1,5000||cher",
+                "2115U-001|Plaquette de frein AV||Freinage|124,380|EUR|Higer Parts|1,6800|1,4000||0"),
+                null);
+
+        assertEquals(0, apercu.lignesValides(), "Aucune des deux ne se propose.");
+        assertEquals(2, apercu.erreurs().size());
+        assertTrue(apercu.erreurs().get(0).message().contains("Prix compétiteur"),
+                apercu.erreurs().get(0).message());
+        assertTrue(apercu.erreurs().get(1).message().contains("positif"),
+                "Un zéro se lirait « le moins cher du marché » : " + apercu.erreurs().get(1).message());
     }
 }

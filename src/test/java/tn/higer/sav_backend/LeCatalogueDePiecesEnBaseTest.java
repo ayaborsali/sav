@@ -108,10 +108,10 @@ class LeCatalogueDePiecesEnBaseTest {
      */
     private static PieceRequest demande(String reference, String designation, String famille,
                                         String exWorks, String coefficientRevient, String coefficientVente) {
-        return new PieceRequest(reference, designation, "Fuel filter", famille, new BigDecimal(exWorks),
+        return new PieceRequest(reference, null, designation, "Fuel filter", famille, new BigDecimal(exWorks),
                 new BigDecimal(coefficientRevient),
                 new BigDecimal(coefficientVente == null ? COEFFICIENT_VENTE : coefficientVente),
-                "Higer Parts", "EUR");
+                "Higer Parts", null, "EUR");
     }
 
     /**
@@ -121,8 +121,8 @@ class LeCatalogueDePiecesEnBaseTest {
      */
     private static PieceRequest demandeAvecType(String reference, String designation, String famille,
                                                 String typePiece, String exWorks, String coefficientRevient) {
-        return new PieceRequest(reference, designation, null, famille, typePiece, new BigDecimal(exWorks),
-                new BigDecimal(coefficientRevient), new BigDecimal(COEFFICIENT_VENTE), "Higer Parts", "EUR");
+        return new PieceRequest(reference, null, designation, null, famille, typePiece, new BigDecimal(exWorks),
+                new BigDecimal(coefficientRevient), new BigDecimal(COEFFICIENT_VENTE), "Higer Parts", null, "EUR");
     }
 
     private PieceResponse ajoute(String reference, String designation, String exWorks,
@@ -170,18 +170,18 @@ class LeCatalogueDePiecesEnBaseTest {
     @Test
     void uneDeviseVideDevientEUREtUneDeviseInconnueEstRefusee() {
         String reference = ref();
-        PieceResponse piece = catalogue.create(new PieceRequest(reference, "Filtre à gasoil", "Fuel filter",
+        PieceResponse piece = catalogue.create(new PieceRequest(reference, null, "Filtre à gasoil", "Fuel filter",
                 "MECANIQUE", new BigDecimal("86.500"), new BigDecimal("1.7200"), new BigDecimal("1.5000"),
-                "Higer Parts", null),
+                "Higer Parts", null, null),
                 jeton(), true);
 
         assertEquals("EUR", piece.devise(), "Une case vide vaut EUR, jamais une pièce sans devise.");
         assertEquals("EUR", ligne(reference).get("devise"));
 
         ResponseStatusException refus = assertThrows(ResponseStatusException.class,
-                () -> catalogue.create(new PieceRequest(ref(), "Filtre à gasoil", null, "MECANIQUE",
+                () -> catalogue.create(new PieceRequest(ref(), null, "Filtre à gasoil", null, "MECANIQUE",
                         new BigDecimal("86.500"), new BigDecimal("1.7200"), new BigDecimal("1.5000"),
-                        "Higer Parts", "GBP"),
+                        "Higer Parts", null, "GBP"),
                         jeton(), true));
         assertEquals(HttpStatus.BAD_REQUEST, refus.getStatusCode());
         assertTrue(refus.getReason().contains("EUR"), refus.getReason());
@@ -559,6 +559,82 @@ class LeCatalogueDePiecesEnBaseTest {
         assertNull(cache.coefficientVente());
         assertNull(cache.prixRevient());
         assertNull(cache.prixVente());
+    }
+
+    /**
+     * Les deux cases de la demande de l'atelier : le numéro imprimé par le
+     * fournisseur et le prix annoncé par un concurrent. Elles se rangent dans leurs
+     * colonnes à elles, ne touchent ni à la référence Higer ni aux deux prix
+     * calculés, et un {@code PUT} qui vide les cases les vide vraiment — c'est un
+     * remplacement, pas un « on garde l'ancienne valeur ».
+     */
+    @Test
+    void laReferenceFournisseurEtLePrixCompetiteurSeRangentSansToucherAuxPrixCalcules() {
+        String reference = ref();
+        PieceResponse piece = catalogue.create(new PieceRequest(reference, "HF-8045", "Filtre à gasoil",
+                "Fuel filter", "MECANIQUE", new BigDecimal("86.500"), new BigDecimal("1.7200"),
+                new BigDecimal("1.5000"), "Higer Parts", new BigDecimal("289.000"), "EUR"),
+                jeton(), true);
+
+        Map<String, Object> rangee = ligne(reference);
+        assertEquals("HF-8045", rangee.get("reference_fournisseur"));
+        assertEquals(new BigDecimal("289.000"), (BigDecimal) rangee.get("prix_competiteur"));
+        // Le prix du concurrent est un renseignement de marché, pas un troisième prix :
+        // 86,500 × 1,7200 = 148,780 de revient, puis × 1,5000 = 223,170 de vente.
+        assertEquals(new BigDecimal("148.780"), (BigDecimal) rangee.get("prix_revient"));
+        assertEquals(new BigDecimal("223.170"), (BigDecimal) rangee.get("prix_vente"));
+        assertEquals("HF-8045", piece.referenceFournisseur());
+
+        catalogue.update(piece.id(), new PieceRequest(reference, null, "Filtre à gasoil", "Fuel filter",
+                "MECANIQUE", new BigDecimal("86.500"), new BigDecimal("1.7200"), new BigDecimal("1.5000"),
+                "Higer Parts", null, "EUR"), jeton(), true);
+        assertNull(ligne(reference).get("reference_fournisseur"), "Case vidée à l'écran, vidée en base.");
+        assertNull(ligne(reference).get("prix_competiteur"));
+    }
+
+    /**
+     * Le prix du compétiteur suit les autres chiffres commerciaux : il ne sort pas
+     * de la réponse d'un compte qui n'y a pas droit. La référence fournisseur, elle,
+     * n'est pas un montant — c'est un numéro de boîte, et il reste lisible.
+     */
+    @Test
+    void lePrixCompetiteurResteCacheSansDroitAuxChiffresMaisLaReferenceFournisseurSeMontre() {
+        String reference = ref();
+        PieceResponse visible = catalogue.create(new PieceRequest(reference, "HF-8045", "Filtre à gasoil",
+                null, "MECANIQUE", new BigDecimal("86.500"), new BigDecimal("1.7200"),
+                new BigDecimal("1.5000"), "Higer Parts", new BigDecimal("289.000"), "EUR"),
+                jeton(), true);
+
+        PieceResponse cache = catalogue.get(visible.id(), false);
+        assertNull(cache.prixCompetiteur(), "Un chiffre commercial ne sort pas de la réponse.");
+        assertEquals("HF-8045", cache.referenceFournisseur(), "Un numéro de boîte n'est pas un montant.");
+    }
+
+    @Test
+    void unPrixCompetiteurNulEstRefuse() {
+        ResponseStatusException refus = assertThrows(ResponseStatusException.class,
+                () -> catalogue.create(new PieceRequest(ref(), null, "Filtre à gasoil", null, "MECANIQUE",
+                        new BigDecimal("86.500"), new BigDecimal("1.7200"), new BigDecimal("1.5000"),
+                        "Higer Parts", new BigDecimal("0.000"), "EUR"), jeton(), true));
+        assertEquals(HttpStatus.BAD_REQUEST, refus.getStatusCode());
+        assertTrue(refus.getReason().contains("positif"), refus.getReason());
+    }
+
+    /**
+     * Un client arrive avec le papier d'un atelier concurrent, où seul le numéro du
+     * fournisseur figure : la recherche le traverse comme la référence Higer, sinon
+     * l'atelier dirait « cette pièce n'est pas au catalogue » alors qu'elle y est.
+     */
+    @Test
+    void laRechercheTrouveUnePieceParSaReferenceFournisseur() {
+        String reference = ref();
+        String referenceFournisseur = "HF-" + reference;
+        catalogue.create(new PieceRequest(reference, referenceFournisseur, "Filtre à gasoil", null,
+                "MECANIQUE", new BigDecimal("86.500"), new BigDecimal("1.7200"), new BigDecimal("1.5000"),
+                "Higer Parts", null, "EUR"), jeton(), true);
+
+        assertEquals(1, catalogue.search(referenceFournisseur.toLowerCase(), null, page(), true).getTotalElements(),
+                "La référence du fournisseur se trouve sans se soucier de la casse tapée.");
     }
 
     /**

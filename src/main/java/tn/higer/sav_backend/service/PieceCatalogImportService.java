@@ -159,20 +159,21 @@ public class PieceCatalogImportService {
      * Notice et Exemple, dans le cas où l'atelier les laisserait traîner.
      */
     public byte[] modele() {
-        List<String> entetes = List.of("Référence", "Désignation FR", "Désignation EN", "Famille",
-                "Prix Ex Works", "Devise", "Fournisseur", "Coefficient de revient", "Coefficient de vente");
+        List<String> entetes = List.of("Réf. Higer", "Réf. fournisseur", "Désignation FR", "Désignation EN",
+                "Famille", "Prix Ex Works", "Devise", "Nom fournisseur", "Prix compétiteur",
+                "Coefficient de revient", "Coefficient de vente");
         try (XSSFWorkbook workbook = new XSSFWorkbook(); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             ecrireFeuille(workbook.createSheet("Pieces"), List.of(entetes));
             ecrireFeuille(workbook.createSheet("Exemple"), List.of(
                     entetes,
-                    List.of("9.8001.045", "Filtre à gasoil", "Fuel filter", "Mécanique", "86,500", "EUR",
-                            "Higer Parts", "1,7200", "1,5000"),
-                    List.of("2115U-001", "Plaquette de frein AV", "Front brake pad", "Freinage", "124,380", "EUR",
-                            "Higer Parts", "1,6800", "1,4000")));
+                    List.of("9.8001.045", "HF-8045", "Filtre à gasoil", "Fuel filter", "Mécanique", "86,500", "EUR",
+                            "Higer Parts", "289,000", "1,7200", "1,5000"),
+                    List.of("2115U-001", "BP-2115", "Plaquette de frein AV", "Front brake pad", "Freinage",
+                            "124,380", "EUR", "Higer Parts", "", "1,6800", "1,4000")));
             ecrireFeuille(workbook.createSheet("Notice"), List.of(
                     List.of("Comment remplir ce classeur"),
                     List.of("1. Écris tes lignes dans la feuille « Pieces », une par pièce. Les entêtes sont reconnus sans accent et sans casse."),
-                    List.of("2. « Référence » et « Désignation FR » sont obligatoires. Une ligne sans référence est refusée : deux pièces du même numéro, ce sont deux prix différents chez le client."),
+                    List.of("2. « Réf. Higer » et « Désignation FR » sont obligatoires. Une ligne sans référence est refusée : deux pièces du même numéro, ce sont deux prix différents chez le client."),
                     List.of("3. « Famille » est obligatoire, et elle ne prend qu'un des sept mots du catalogue : "
                             + PieceFamily.mots() + ". « mecanique », « FREINAGE » et « Boîte de vitesse » se lisent tous ; "
                             + "un autre mot refuse la ligne. Le serveur ne range jamais une pièce à ta place, pas même en « Divers »."),
@@ -184,7 +185,8 @@ public class PieceCatalogImportService {
                     List.of("9. Une référence déjà au catalogue est mise à jour, elle n'est pas doublée, et son prix de vente est recalculé avec le coefficient de cette ligne. Si elle avait été retirée, l'import la remet en service."),
                     List.of("10. Deux fois la même référence dans le fichier : la dernière ligne gagne, et l'aperçu le dit."),
                     List.of("11. Un coefficient peut rester vide dans le fichier : la valeur saisie avant l'import prend le relais. Sans l'une ni l'autre, la ligne est refusée."),
-                    List.of("12. Formats acceptés : .xlsx, .xls, .csv. L'aperçu montre tout avant d'écrire quoi que ce soit.")));
+                    List.of("12. « Réf. fournisseur » et « Prix compétiteur » sont facultatifs. La première est le numéro imprimé par le fournisseur, elle ne remplace jamais la référence Higer. Le second s'écrit en dinars et ne remplace aucun des deux prix calculés : l'écran le signale en rouge quand il passe sous notre prix de vente. Laisse la case vide si tu ne le connais pas — un zéro n'est pas « pas de concurrent »."),
+                    List.of("13. Formats acceptés : .xlsx, .xls, .csv. L'aperçu montre tout avant d'écrire quoi que ce soit.")));
             workbook.write(out);
             return out.toByteArray();
         } catch (IOException e) {
@@ -360,7 +362,14 @@ public class PieceCatalogImportService {
         List<String> entete = grille.get(0);
         Set<Integer> occupees = new LinkedHashSet<>();
         Set<Integer> prixDerives = new LinkedHashSet<>();
-        int refCol = cueillette(entete, occupees, "reference", "ref", "code", "numeropiece", "partnumber", "pn");
+        // La référence fournisseur se cueille AVANT la référence Higer : « Référence
+        // fournisseur » commence par « référence », et la laisser passer d'abord
+        // ferait du numéro de la boîte la clé d'unicité du catalogue — deux pièces
+        // Higer entreraient alors comme une seule.
+        int refFournisseurCol = cueillette(entete, occupees, "referencefournisseur", "reffournisseur",
+                "refsupplier", "supplierref", "fournisseurref", "supplierpartnumber");
+        int refCol = cueillette(entete, occupees, "refhiger", "reference", "ref", "code", "numeropiece",
+                "partnumber", "pn");
         int designationEnCol = cueillette(entete, occupees, "designationen", "designationanglais",
                 "englishdesignation", "designationfrancaiseetanglaise");
         // La famille se cueille tôt : « Type » est un mot que les classeurs mettent
@@ -373,11 +382,17 @@ public class PieceCatalogImportService {
         // c'est un taux reconnu, pas une colonne à ignorer. Une colonne « Prix de
         // vente » restée libre finira dans les prix dérivés, comme le revient.
         int coefVenteCol = cueilletteCoefficientVente(entete, occupees);
+        // Le prix du compétiteur aussi se cueille avant le prix Ex Works : « Prix
+        // compétiteur » commence par « prix », et le prendre pour le prix du
+        // fournisseur changerait le prix de revient de la pièce.
+        int prixCompetiteurCol = cueillette(entete, occupees, "prixcompetiteur", "prixconcurrent",
+                "prixconcurrence", "competitorprice", "concurrentprice");
         int prixCol = cueilletteSansVente(entete, occupees, prixDerives, "prixexworks", "exworks", "prixexwork",
                 "prixexworkht", "unitprice", "prix", "pu", "montant");
         int designationFrCol = cueillette(entete, occupees, "designationfr", "designation", "libelle",
                 "article", "description", "designations");
-        int fournisseurCol = cueillette(entete, occupees, "fournisseur", "supplier", "vendor", "origine");
+        int fournisseurCol = cueillette(entete, occupees, "nomfournisseur", "nomdufournisseur",
+                "fournisseurname", "suppliername", "fournisseur", "supplier", "vendor", "origine");
         int deviseCol = cueillette(entete, occupees, "devise", "currency", "monnaie");
 
         if (refCol < 0) {
@@ -398,8 +413,9 @@ public class PieceCatalogImportService {
                             + "pièce s'y range dans une seule des sept familles — " + PieceFamily.mots() + "."));
         }
         signaleLesColonnesDePrixDerive(nom, entete, prixDerives, avertissements);
-        signaleLesColonnesInconnues(nom, entete, occupees, avertissements, refCol, designationFrCol,
-                designationEnCol, familleCol, prixCol, fournisseurCol, coefRevientCol, coefVenteCol, deviseCol);
+        signaleLesColonnesInconnues(nom, entete, occupees, avertissements, refCol, refFournisseurCol,
+                designationFrCol, designationEnCol, familleCol, prixCol, fournisseurCol, coefRevientCol,
+                coefVenteCol, prixCompetiteurCol, deviseCol);
         if (!erreurs.isEmpty()) {
             return new PieceImportPreview(List.of(), erreurs, avertissements);
         }
@@ -447,8 +463,15 @@ public class PieceCatalogImportService {
             BigDecimal coefficientVente = coefficientLit(row, coefVenteCol, defautVente,
                     DECIMALES_DUN_COEFFICIENT, "Coefficient de vente", nom, r, erreurs);
             String famille = familleLit(row, familleCol, nom, r, erreurs);
+            // Le prix du compétiteur est facultatif : une case vide est un vrai « pas
+            // renseigné ». Une case qui porte autre chose qu'un montant positif, en
+            // revanche, refuse la ligne — un chiffre deviné de travers ferait croire
+            // que le concurrent est le moins cher.
+            BigDecimal prixCompetiteur = montantOptionnelLit(row, prixCompetiteurCol, DECIMALES_DUN_PRIX,
+                    "Prix compétiteur", nom, r, erreurs);
             PieceRequest demande = new PieceRequest(
                     case_(row, refCol),
+                    case_(row, refFournisseurCol),
                     case_(row, designationFrCol),
                     case_(row, designationEnCol),
                     famille,
@@ -456,6 +479,7 @@ public class PieceCatalogImportService {
                     coefficientRevient,
                     coefficientVente,
                     case_(row, fournisseurCol),
+                    prixCompetiteur,
                     deviseLit(row, deviseCol, nom, r, erreurs));
             if (demande.reference() == null || demande.designationFr() == null) {
                 if (demande.designationFr() == null) {
@@ -660,6 +684,36 @@ public class PieceCatalogImportService {
             return null;
         }
         return scaled(canonique, quoi, nom, r, decimalesPermises, erreurs);
+    }
+
+    /**
+     * Une case d'argent <b>facultative</b> — le prix du compétiteur. Colonne absente
+     * ou case vide veut dire « pas renseigné » et rend {@code null}. Une case
+     * remplie, elle, doit se lire comme un montant positif : ce qui ne se lit pas
+     * refuse la ligne, parce qu'un prix deviné de travers ferait croire que le
+     * concurrent est le moins cher du marché.
+     */
+    private static BigDecimal montantOptionnelLit(List<String> row, int index, int decimalesPermises, String quoi,
+                                                  String nom, int r, List<Issue> erreurs) {
+        String brut = index < 0 ? null : (index < row.size() ? row.get(index) : null);
+        if (brut == null || brut.isBlank()) {
+            return null;
+        }
+        String canonique = nombre(brut);
+        if (canonique == null) {
+            erreurs.add(new Issue(nom, r + 1, quoi,
+                    "« " + brut.trim() + " » ne se lit pas comme un nombre pour « " + quoi
+                            + " ». Écris-le en chiffres, sans unité ni symbole, ou laisse la case vide."));
+            return null;
+        }
+        BigDecimal valeur = scaled(canonique, quoi, nom, r, decimalesPermises, erreurs);
+        if (valeur != null && valeur.signum() <= 0) {
+            erreurs.add(new Issue(nom, r + 1, quoi,
+                    "« " + canonique + " » : le prix compétiteur doit être positif. Une case vide dit déjà "
+                            + "« pas renseigné », et un zéro se lirait comme le prix le plus bas du marché."));
+            return null;
+        }
+        return valeur;
     }
 
     /**

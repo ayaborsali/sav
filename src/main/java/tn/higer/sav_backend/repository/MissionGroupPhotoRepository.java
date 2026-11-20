@@ -14,5 +14,8 @@ public interface MissionGroupPhotoRepository extends JpaRepository<MissionGroupP
 
     boolean existsByDossierIdAndAngle(String dossierId, MissionGroupPhotoAngle angle);
 
+    /** Une preuve accrochée à une ligne de bus : la correction recrée ces lignes, la photo resterait sans support. */
+    boolean existsByDossierIdAndBusIdIsNotNull(String dossierId);
+
     boolean existsByDossierIdAndBusIdAndAngle(String dossierId, String busId, MissionGroupPhotoAngle angle);
 }

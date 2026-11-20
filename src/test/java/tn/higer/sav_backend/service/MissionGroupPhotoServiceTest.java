@@ -24,6 +24,7 @@ import tn.higer.sav_backend.repository.MissionGroupPhotoRepository;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
 
@@ -128,6 +129,22 @@ class MissionGroupPhotoServiceTest {
                 () -> service().upload("mgd-1", fichier, "depart", null, null,
                         jeton("usr-2"), technicien("usr-2")));
         assertEquals(HttpStatus.FORBIDDEN, ex.getStatusCode());
+        verify(photos, org.mockito.Mockito.never()).save(any());
+    }
+
+    @Test
+    void un_dossier_annule_ne_recoit_plus_de_photo() {
+        MissionGroupDossier annule = dossier();
+        annule.setCancelledAt(LocalDateTime.of(2026, 11, 10, 10, 0));
+        annule.setCancelReason("Bus réparé sur place");
+        when(dossiers.findById("mgd-1")).thenReturn(Optional.of(annule));
+        MockMultipartFile fichier = new MockMultipartFile(
+                "file", "depart.jpg", "image/jpeg", new byte[]{3, 1, 4});
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> service().upload("mgd-1", fichier, "depart", null, null, jeton(), chef()));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+        assertTrue(ex.getReason().contains("annulé"), ex.getReason());
         verify(photos, org.mockito.Mockito.never()).save(any());
     }
 

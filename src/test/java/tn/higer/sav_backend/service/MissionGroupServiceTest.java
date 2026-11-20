@@ -204,8 +204,8 @@ class MissionGroupServiceTest {
     /** La période et le canal se contrôlent avant de toucher aux bus. */
     private void portefeuilleSansBus() {
         when(clients.findById("cli-1")).thenReturn(Optional.of(client()));
-        when(users.findById(UUID.fromString(TECH_ID))).thenReturn(Optional.of(homme()));
-        when(serviceVehicles.findById("sv-1")).thenReturn(Optional.of(voiture()));
+        when(users.findByIdForUpdate(UUID.fromString(TECH_ID))).thenReturn(Optional.of(homme()));
+        when(serviceVehicles.findByIdForUpdate("sv-1")).thenReturn(Optional.of(voiture()));
     }
 
     private static MissionGroupDossier dossierPrepare() {
@@ -370,8 +370,8 @@ class MissionGroupServiceTest {
     @Test
     void un_dossier_sans_bus_est_refuse() {
         when(clients.findById("cli-1")).thenReturn(Optional.of(client()));
-        when(users.findById(UUID.fromString(TECH_ID))).thenReturn(Optional.of(homme()));
-        when(serviceVehicles.findById("sv-1")).thenReturn(Optional.of(voiture()));
+        when(users.findByIdForUpdate(UUID.fromString(TECH_ID))).thenReturn(Optional.of(homme()));
+        when(serviceVehicles.findByIdForUpdate("sv-1")).thenReturn(Optional.of(voiture()));
         DossierRequest sansBus = new DossierRequest(null, "cli-1",
                 LocalDateTime.of(2026, 11, 11, 8, 0), TECH_ID, "sv-1", List.of(), List.of(),
                 null, null, null, null);
@@ -388,8 +388,8 @@ class MissionGroupServiceTest {
         autre.setClientId("cli-2");
         when(clients.findById("cli-1")).thenReturn(Optional.of(client()));
         when(vehicles.findById("veh-1")).thenReturn(Optional.of(autre));
-        when(users.findById(UUID.fromString(TECH_ID))).thenReturn(Optional.of(homme()));
-        when(serviceVehicles.findById("sv-1")).thenReturn(Optional.of(voiture()));
+        when(users.findByIdForUpdate(UUID.fromString(TECH_ID))).thenReturn(Optional.of(homme()));
+        when(serviceVehicles.findByIdForUpdate("sv-1")).thenReturn(Optional.of(voiture()));
 
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
                 () -> service().creer(demande(null, "cli-1"), jeton("usr-chef"), chef()));
@@ -403,7 +403,7 @@ class MissionGroupServiceTest {
         AppUser parti = homme();
         parti.setActive(false);
         when(clients.findById("cli-1")).thenReturn(Optional.of(client()));
-        when(users.findById(UUID.fromString(TECH_ID))).thenReturn(Optional.of(parti));
+        when(users.findByIdForUpdate(UUID.fromString(TECH_ID))).thenReturn(Optional.of(parti));
 
         ResponseStatusException ex = assertThrows(ResponseStatusException.class,
                 () -> service().creer(demande(null, "cli-1"), jeton("usr-chef"), chef()));
@@ -643,6 +643,37 @@ class MissionGroupServiceTest {
         // L'autre ligne reste ouverte : le retour n'est pas bloqué, mais l'atelier la voit.
         assertTrue(apres.checklistIncomplete());
         assertEquals(2, apres.checklist().size());
+    }
+
+    @Test
+    void un_dossier_annule_ne_recoit_plus_de_constat() {
+        MissionGroupDossier dossier = dossierPrepare();
+        dossier.setCancelledAt(LocalDateTime.of(2026, 11, 10, 10, 0));
+        dossier.setCancelReason("Bus réparé sur place");
+        when(dossiers.findById("mgd-1")).thenReturn(Optional.of(dossier));
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> service().constat("mgd-1", "mgb-1",
+                        new ConstatRequest("P0234", null, "vu"),
+                        jeton(), technicien()));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+        assertTrue(ex.getReason().contains("annulé"), ex.getReason());
+        verify(buses, never()).save(any());
+    }
+
+    @Test
+    void un_dossier_annule_ne_se_coche_plus() {
+        MissionGroupDossier dossier = dossierPrepare();
+        dossier.setCancelledAt(LocalDateTime.of(2026, 11, 10, 10, 0));
+        dossier.setCancelReason("Bus réparé sur place");
+        when(dossiers.findById("mgd-1")).thenReturn(Optional.of(dossier));
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> service().cocher("mgd-1", "mgc-1", new CocherRequest(true),
+                        jeton(), technicien()));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+        assertTrue(ex.getReason().contains("annulé"), ex.getReason());
+        verify(checklist, never()).save(any());
     }
 
     // ------------------------------------------------------------------ lecture
@@ -946,7 +977,6 @@ class MissionGroupServiceTest {
         when(dossiers.findAll()).thenReturn(List.of(dossier));
         when(buses.findByDossierIdOrderByPositionAsc("mgd-1")).thenReturn(List.of());
         when(checklist.findByDossierIdOrderByPositionAsc("mgd-1")).thenReturn(List.of());
-        when(photos.findByDossierIdOrderByUploadedAtAsc("mgd-1")).thenReturn(List.of());
 
         service().modifier("mgd-1", demande("1740", "cli-1"), jeton("usr-chef"), chef());
 
@@ -963,7 +993,6 @@ class MissionGroupServiceTest {
         when(buses.findByDossierIdOrderByPositionAsc("mgd-1")).thenReturn(List.of(ligne()));
         when(checklist.findByDossierIdOrderByPositionAsc("mgd-1"))
                 .thenReturn(List.of(ligneFiche("mgc-1", "Ancienne ligne", false)));
-        when(photos.findByDossierIdOrderByUploadedAtAsc("mgd-1")).thenReturn(List.of());
         when(dossiers.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         DossierResponse rendu = service().modifier("mgd-1", demande("1741", "cli-1"),
@@ -988,13 +1017,26 @@ class MissionGroupServiceTest {
     }
 
     @Test
+    void une_photo_de_bus_empeche_encore_la_correction() {
+        MissionGroupDossier dossier = dossierPrepare();
+        when(dossiers.findById("mgd-1")).thenReturn(Optional.of(dossier));
+        when(photos.existsByDossierIdAndBusIdIsNotNull("mgd-1")).thenReturn(true);
+
+        ResponseStatusException ex = assertThrows(ResponseStatusException.class,
+                () -> service().modifier("mgd-1", demande("1741", "cli-1"),
+                        jeton("usr-chef"), chef()));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatusCode());
+        assertTrue(ex.getReason().contains("photos de bus"), ex.getReason());
+        verify(dossiers, never()).save(any());
+    }
+
+    @Test
     void la_modification_garde_le_numero_s_il_n_est_pas_change() {
         portefeuilleComplet();
         MissionGroupDossier dossier = dossierPrepare();
         when(dossiers.findById("mgd-1")).thenReturn(Optional.of(dossier));
         when(buses.findByDossierIdOrderByPositionAsc("mgd-1")).thenReturn(List.of(ligne()));
         when(checklist.findByDossierIdOrderByPositionAsc("mgd-1")).thenReturn(List.of());
-        when(photos.findByDossierIdOrderByUploadedAtAsc("mgd-1")).thenReturn(List.of());
         when(dossiers.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         DossierResponse rendu = service().modifier("mgd-1", demande(null, "cli-1"),
@@ -1104,13 +1146,13 @@ class MissionGroupServiceTest {
     void un_dossier_annule_se_corrige_encore_pour_changer_d_homme() {
         when(clients.findById("cli-1")).thenReturn(Optional.of(client()));
         when(vehicles.findById("veh-1")).thenReturn(Optional.of(busDuClient()));
-        when(serviceVehicles.findById("sv-1")).thenReturn(Optional.of(voiture()));
+        when(serviceVehicles.findByIdForUpdate("sv-1")).thenReturn(Optional.of(voiture()));
         AppUser autre = new AppUser();
         autre.setId(UUID.fromString(AUTRE_TECH));
         autre.setName("Sami");
         autre.setRole(Role.TECHNICIEN);
         autre.setActive(true);
-        when(users.findById(UUID.fromString(AUTRE_TECH))).thenReturn(Optional.of(autre));
+        when(users.findByIdForUpdate(UUID.fromString(AUTRE_TECH))).thenReturn(Optional.of(autre));
 
         MissionGroupDossier dossier = dossierPrepare();
         dossier.setPlannedReturnAt(LocalDateTime.of(2026, 11, 11, 18, 0));
@@ -1120,7 +1162,6 @@ class MissionGroupServiceTest {
         when(dossiers.findById("mgd-1")).thenReturn(Optional.of(dossier));
         when(buses.findByDossierIdOrderByPositionAsc("mgd-1")).thenReturn(List.of(ligne()));
         when(checklist.findByDossierIdOrderByPositionAsc("mgd-1")).thenReturn(List.of());
-        when(photos.findByDossierIdOrderByUploadedAtAsc("mgd-1")).thenReturn(List.of());
         when(dossiers.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
         DossierRequest changement = new DossierRequest("1740", "cli-1",

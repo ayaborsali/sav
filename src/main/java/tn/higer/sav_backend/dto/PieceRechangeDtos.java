@@ -49,6 +49,14 @@ public final class PieceRechangeDtos {
             @Size(max = 160, message = "La référence d'une pièce ne dépasse pas 160 caractères.")
             String reference,
 
+            /**
+             * Le numéro du fournisseur, quand il diffère de la référence Higer. Il ne
+             * remplace pas {@link #reference} : c'est celle-là que le service rend
+             * unique et qu'on redemande au constructeur.
+             */
+            @Size(max = 160, message = "La référence du fournisseur ne dépasse pas 160 caractères.")
+            String referenceFournisseur,
+
             @NotBlank(message = "La désignation en français est obligatoire : c'est le mot que le lecteur du devis comprend.")
             @Size(max = 300, message = "La désignation française ne dépasse pas 300 caractères.")
             String designationFr,
@@ -90,6 +98,16 @@ public final class PieceRechangeDtos {
             @Size(max = 160, message = "Le nom du fournisseur ne dépasse pas 160 caractères.")
             String fournisseur,
 
+            /**
+             * Le prix annoncé par un atelier concurrent, en dinars. Facultatif : un
+             * prix calculé ne le remplace pas, et il ne remplace aucun des deux prix
+             * calculés. Il doit être positif quand il est écrit — zéro se lirait
+             * comme le prix le plus bas du marché.
+             */
+            @DecimalMin(value = "0.0001", message = "Le prix compétiteur doit être positif.")
+            @Digits(integer = 9, fraction = 3, message = "Le prix compétiteur se donne au millime près, pas davantage.")
+            BigDecimal prixCompetiteur,
+
             @Pattern(regexp = PieceRechange.REGEX_DEVISE,
                     message = "La devise doit être EUR, USD, TND ou CNY (EUR si la case est vide).")
             String devise
@@ -100,24 +118,27 @@ public final class PieceRechangeDtos {
          * porte les deux mots. Le type reste « à classer » et l'atelier le met à
          * l'écran — l'import n'en invente pas à partir de la famille.
          */
-        public PieceRequest(String reference, String designationFr, String designationEn, String famille,
-                            BigDecimal prixExWorks, BigDecimal coefficientRevient, BigDecimal coefficientVente,
-                            String fournisseur, String devise) {
-            this(reference, designationFr, designationEn, famille, null, prixExWorks,
-                    coefficientRevient, coefficientVente, fournisseur, devise);
+        public PieceRequest(String reference, String referenceFournisseur, String designationFr,
+                            String designationEn, String famille, BigDecimal prixExWorks,
+                            BigDecimal coefficientRevient, BigDecimal coefficientVente,
+                            String fournisseur, BigDecimal prixCompetiteur, String devise) {
+            this(reference, referenceFournisseur, designationFr, designationEn, famille, null, prixExWorks,
+                    coefficientRevient, coefficientVente, fournisseur, prixCompetiteur, devise);
         }
     }
 
     /** Une ligne du catalogue telle que l'écran la lit. */
-    public record PieceResponse(String id, String reference, String designationFr, String designationEn,
-                               String famille, String typePiece, BigDecimal prixExWorks, String devise,
-                               BigDecimal coefficientRevient, BigDecimal coefficientVente,
-                               BigDecimal prixRevient, BigDecimal prixVente, String fournisseur, boolean active,
+    public record PieceResponse(String id, String reference, String referenceFournisseur, String designationFr,
+                               String designationEn, String famille, String typePiece, BigDecimal prixExWorks,
+                               String devise, BigDecimal coefficientRevient, BigDecimal coefficientVente,
+                               BigDecimal prixRevient, BigDecimal prixVente, String fournisseur,
+                               BigDecimal prixCompetiteur, boolean active,
                                LocalDateTime createdAt, LocalDateTime updatedAt) {
 
         public static PieceResponse from(PieceRechange piece, boolean prixVisibles) {
             return new PieceResponse(
-                    piece.getId(), piece.getReference(), piece.getDesignationFr(), piece.getDesignationEn(),
+                    piece.getId(), piece.getReference(), piece.getReferenceFournisseur(),
+                    piece.getDesignationFr(), piece.getDesignationEn(),
                     // Ni la famille ni le type ne sont des chiffres commerciaux : ils se
                     // montrent à tout compte connecté.
                     piece.getFamille() == null ? null : piece.getFamille().name(),
@@ -127,7 +148,11 @@ public final class PieceRechangeDtos {
                     prixVisibles ? piece.getCoefficientVente() : null,
                     prixVisibles ? piece.getPrixRevient() : null,
                     prixVisibles ? piece.getPrixVente() : null,
-                    piece.getFournisseur(), piece.isActive(), piece.getCreatedAt(), piece.getUpdatedAt());
+                    piece.getFournisseur(),
+                    // Le prix du compétiteur est un chiffre commercial : il sort de la
+                    // réponse avec les autres, et pas même un « plus cher / moins cher ».
+                    prixVisibles ? piece.getPrixCompetiteur() : null,
+                    piece.isActive(), piece.getCreatedAt(), piece.getUpdatedAt());
         }
     }
 
@@ -163,6 +188,8 @@ public final class PieceRechangeDtos {
             @NotBlank(message = "La référence de la pièce est obligatoire : c'est elle qu'on redemande au constructeur.")
             @Size(max = 160, message = "La référence d'une pièce ne dépasse pas 160 caractères.")
             String reference,
+            @Size(max = 160, message = "La référence du fournisseur ne dépasse pas 160 caractères.")
+            String referenceFournisseur,
             @NotBlank(message = "La désignation en français est obligatoire : c'est le mot que le lecteur du devis comprend.")
             @Size(max = 300, message = "La désignation française ne dépasse pas 300 caractères.")
             String designationFr,
@@ -185,6 +212,9 @@ public final class PieceRechangeDtos {
             BigDecimal coefficientVente,
             @Size(max = 160, message = "Le nom du fournisseur ne dépasse pas 160 caractères.")
             String fournisseur,
+            @DecimalMin(value = "0.0001", message = "Le prix compétiteur doit être positif.")
+            @Digits(integer = 9, fraction = 3, message = "Le prix compétiteur se donne au millime près, pas davantage.")
+            BigDecimal prixCompetiteur,
             @Pattern(regexp = PieceRechange.REGEX_DEVISE,
                     message = "La devise doit être EUR, USD, TND ou CNY (EUR si la case est vide).")
             String devise,
@@ -193,15 +223,15 @@ public final class PieceRechangeDtos {
 
         /** La ligne telle qu'elle deviendra une demande d'enregistrement : même contenu, sans le renseignement d'aperçu. */
         public PieceRequest toRequest() {
-            return new PieceRequest(reference, designationFr, designationEn, famille, prixExWorks,
-                    coefficientRevient, coefficientVente, fournisseur, devise);
+            return new PieceRequest(reference, referenceFournisseur, designationFr, designationEn, famille,
+                    prixExWorks, coefficientRevient, coefficientVente, fournisseur, prixCompetiteur, devise);
         }
 
         public static PieceImportLine of(int row, PieceRequest request, boolean dejaAuCatalogue) {
-            return new PieceImportLine(row, request.reference(), request.designationFr(),
-                    request.designationEn(), request.famille(), request.prixExWorks(),
+            return new PieceImportLine(row, request.reference(), request.referenceFournisseur(),
+                    request.designationFr(), request.designationEn(), request.famille(), request.prixExWorks(),
                     request.coefficientRevient(), request.coefficientVente(), request.fournisseur(),
-                    request.devise(), dejaAuCatalogue);
+                    request.prixCompetiteur(), request.devise(), dejaAuCatalogue);
         }
     }
 

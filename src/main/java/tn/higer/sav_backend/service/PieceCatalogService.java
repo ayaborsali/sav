@@ -231,12 +231,17 @@ public class PieceCatalogService {
     /** Une seule écriture des valeurs : l'ajout, la modification et l'import passent tous ici. */
     private void appliquer(PieceRechange piece, PieceRequest request, String reference) {
         piece.setReference(reference);
+        // La référence du fournisseur se recolle comme elle a été lue (« AB 12 3 » et
+        // « AB 12 3 » se relisent pareil), sans jamais toucher à la référence Higer :
+        // c'est celle-là qui décide de l'unicité, pas le numéro de la boîte.
+        piece.setReferenceFournisseur(referenceFournisseur(request.referenceFournisseur()));
         piece.setDesignationFr(exigee(request.designationFr()));
         piece.setDesignationEn(texteOptionnel(request.designationEn()));
         piece.setFamille(famille(request.famille()));
         piece.setTypePiece(type(request.typePiece()));
         piece.setDevise(devise(request.devise()));
         piece.setFournisseur(texteOptionnel(request.fournisseur()));
+        piece.setPrixCompetiteur(prixCompetiteur(request.prixCompetiteur()));
         piece.setPrixExWorks(request.prixExWorks());
         piece.setCoefficientRevient(request.coefficientRevient());
         piece.setCoefficientVente(request.coefficientVente());
@@ -286,6 +291,34 @@ public class PieceCatalogService {
 
     private static String normaliser(String raw) {
         return raw.trim().replaceAll("\\s+", " ");
+    }
+
+    /**
+     * La référence du fournisseur, facultative. Elle se recolle comme une référence
+     * (les espaces doublés du classeur tombent) mais ne touche jamais à la référence
+     * Higer : deux numéros dans la même colonne feraient entrer la même pièce deux
+     * fois au catalogue.
+     */
+    private static String referenceFournisseur(String raw) {
+        String value = texteOptionnel(raw);
+        return value == null ? null : normaliser(value);
+    }
+
+    /**
+     * Le prix du compétiteur, facultatif. Écrit, il doit être positif : zéro se
+     * lirait « le moins cher du marché » alors que la case n'a pas été remplie, et
+     * la base le refuse de toute façon (la CHECK de V59).
+     */
+    private static BigDecimal prixCompetiteur(BigDecimal value) {
+        if (value == null) {
+            return null;
+        }
+        if (value.signum() <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Le prix compétiteur doit être positif : un concurrent à zéro dinar n'existe pas, et la case "
+                            + "vide dit déjà « pas renseigné ».");
+        }
+        return value;
     }
 
     /**

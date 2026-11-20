@@ -85,6 +85,11 @@ public class MissionGroupPhotoService {
                                 String note, Jwt jwt, Authentication auth) {
         MissionGroupDossier dossier = dossier(dossierId);
         requireOperatorOf(dossier, jwt, auth);
+        if (dossier.getCancelledAt() != null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Le dossier " + dossier.getNumber() + " est annulé : "
+                            + "plus aucune photo ne s'y verse.");
+        }
         MissionGroupPhotoAngle shot;
         try {
             shot = MissionGroupPhotoAngle.parse(angle);

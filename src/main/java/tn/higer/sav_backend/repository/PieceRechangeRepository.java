@@ -13,13 +13,15 @@ import java.util.Optional;
 public interface PieceRechangeRepository extends JpaRepository<PieceRechange, String> {
 
     /**
-     * Les trois colonnes qu'une recherche d'atelier traverse : la référence et les
-     * deux désignations. Une seule écriture de ce motif, parce que le filtre par
-     * famille doit chercher exactement au même endroit que le filtre sans famille —
-     * deux versions qui divergent font une famille qui « n'a rien » alors que le mot
-     * s'y trouve.
+     * Les quatre colonnes qu'une recherche d'atelier traverse : la référence Higer,
+     * la référence du fournisseur — un client arrive parfois avec le papier d'un
+     * concurrent, où seul ce numéro figure — et les deux désignations. Une seule
+     * écriture de ce motif, parce que le filtre par famille doit chercher exactement
+     * au même endroit que le filtre sans famille — deux versions qui divergent font
+     * une famille qui « n'a rien » alors que le mot s'y trouve.
      */
     String MOTIFS = "lower(p.reference) like :pattern escape '\\' "
+            + "or lower(coalesce(p.referenceFournisseur, '')) like :pattern escape '\\' "
             + "or lower(p.designationFr) like :pattern escape '\\' "
             + "or lower(coalesce(p.designationEn, '')) like :pattern escape '\\'";
 
