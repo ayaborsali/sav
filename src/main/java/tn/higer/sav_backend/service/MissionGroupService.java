@@ -246,8 +246,8 @@ public class MissionGroupService {
         ServiceVehicle voiture = findVehicle(request.serviceVehicleId());
         requirePeriodeCoherente(request.plannedDepartureAt(), request.plannedReturnAt(),
                 request.plannedDepartureMileage(), request.plannedReturnMileage());
-        requireHommeEtVoitureLibres(homme, voiture, request.plannedDepartureAt(),
-                request.plannedReturnAt(), null);
+        List<String> conflits = conflitsAffectation(homme, voiture,
+                request.plannedDepartureAt(), request.plannedReturnAt(), null);
         MissionCallChannel canal = canal(request.callChannel());
 
         List<Vehicle> choisis = busesDuClient(clientId, request.buses());
@@ -292,6 +292,7 @@ public class MissionGroupService {
                 "Dossier " + dossier.getNumber() + " (" + ecrites.size() + " bus, fiche atelier : "
                         + fiche.size() + " lignes) pour " + client.getName() + ", "
                         + homme.getName() + " et la voiture " + voiture.getRegistration(), jwt);
+        noterConflits(dossier, conflits, "créé", jwt);
         apresValidation(() -> prevenirAffectation(dossier, false));
         return response(dossier, ecrites, List.of(), fiche, List.of());
     }
@@ -339,8 +340,8 @@ public class MissionGroupService {
         ServiceVehicle voiture = findVehicle(request.serviceVehicleId());
         requirePeriodeCoherente(request.plannedDepartureAt(), request.plannedReturnAt(),
                 request.plannedDepartureMileage(), request.plannedReturnMileage());
-        requireHommeEtVoitureLibres(homme, voiture, request.plannedDepartureAt(),
-                request.plannedReturnAt(), id);
+        List<String> conflits = conflitsAffectation(homme, voiture,
+                request.plannedDepartureAt(), request.plannedReturnAt(), id);
         MissionCallChannel canal = canal(request.callChannel());
         List<Vehicle> choisis = busesDuClient(clientId, request.buses());
 
@@ -389,6 +390,7 @@ public class MissionGroupService {
                         + voiture.getRegistration()
                         + (dossier.getCancelledAt() == null ? ""
                         : " (dossier annulé : l'annulation reste posée)"), jwt);
+        noterConflits(dossier, conflits, "modifié", jwt);
         // Une correction d'heure ne fait pas sonner le téléphone ; un autre homme
         // affecté, si. L'ancien n'a plus rien à faire de ce dossier. Sur un
         // dossier annulé, personne ne sonne : la réouverture préviendra.
@@ -446,11 +448,10 @@ public class MissionGroupService {
     }
 
     /**
-     * Rouvrir un dossier annulé par erreur. Le papier ne revient pas tout seul :
-     * entre l'annulation et aujourd'hui, l'homme ou la voiture ont pu être
-     * engagés ailleurs. Les conditions de la préparation se rejouent donc —
-     * l'homme et la voiture doivent être libres sur la période estimée, sinon
-     * le dossier reste annulé et l'atelier corrige l'affectation, puis rouvre.
+     * Rouvrir un dossier annulé par erreur. Entre l'annulation et aujourd'hui,
+     * l'homme ou la voiture ont pu être engagés ailleurs : la disponibilité est
+     * relue, mais elle ne bloque pas la réouverture. Un conflit éventuel est
+     * écrit au journal (« CONFLICT_ACCEPTED ») et l'écran l'a déjà montré en rouge.
      *
      * Le motif d'annulation ne disparaît pas du contrôle : il passe au journal,
      * et le téléphone de l'homme reçoit de nouveau l'annonce du dossier.
@@ -475,19 +476,14 @@ public class MissionGroupService {
                 dossier.getPlannedReturnAt(), id);
         String hommeMotif = dossier.getTechnicianUserId() == null ? null
                 : prise.hommes().get(dossier.getTechnicianUserId());
-        if (hommeMotif != null) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "Le technicien « " + dossier.getTechnicianName() + " » n'est plus libre : "
-                            + hommeMotif + ". Le dossier reste annulé ; corrigez l'homme ou la "
-                            + "voiture du dossier, puis rouvrez-le.");
-        }
         String voitureMotif = dossier.getServiceVehicleId() == null ? null
                 : prise.voitures().get(dossier.getServiceVehicleId());
+        List<String> conflits = new ArrayList<>();
+        if (hommeMotif != null) {
+            conflits.add("Technicien « " + dossier.getTechnicianName() + " » : " + hommeMotif);
+        }
         if (voitureMotif != null) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "La voiture « " + dossier.getServiceVehicleRegistration() + " » n'est plus libre : "
-                            + voitureMotif + ". Le dossier reste annulé ; corrigez l'homme ou la "
-                            + "voiture du dossier, puis rouvrez-le.");
+            conflits.add("Voiture « " + dossier.getServiceVehicleRegistration() + " » : " + voitureMotif);
         }
 
         String ancienMotif = dossier.getCancelReason();
@@ -501,6 +497,7 @@ public class MissionGroupService {
                 "Dossier " + dossier.getNumber() + " rouvert"
                         + (ancienMotif == null ? "." : " (motif d'annulation : " + ancienMotif + ")."),
                 jwt);
+        noterConflits(dossier, conflits, "rouvert", jwt);
         apresValidation(() -> prevenirReouverture(dossier));
         return response(dossier);
     }
@@ -524,7 +521,8 @@ public class MissionGroupService {
         }
         Occupation prise = occupation(depart, retour, excludeId);
         return new AvailabilityResponse(new ArrayList<>(prise.hommes().keySet()),
-                new ArrayList<>(prise.voitures().keySet()));
+                new ArrayList<>(prise.voitures().keySet()),
+                prise.hommes(), prise.voitures());
     }
 
     /** Un homme ou une voiture déjà engagé, et la phrase qui dit pourquoi. */
@@ -987,26 +985,36 @@ public class MissionGroupService {
     }
 
     /**
-     * Le dernier verrou : l'écran ne propose que les libres, mais deux guichets
-     * peuvent lire la même liste au même moment. Le serveur refuse donc le
-     * dossier qui prendrait un homme ou une voiture déjà engagés.
+     * Les conflits d'affectation, sans rien refuser : un homme ou une voiture déjà
+     * engagé sur la période n'empêche pas de préparer le dossier. L'écran les
+     * montre en rouge avec leur motif ; le serveur se contente de les relire ici
+     * (liste vide = tout est libre) pour les écrire au journal.
      */
-    private void requireHommeEtVoitureLibres(AppUser homme, ServiceVehicle voiture,
+    private List<String> conflitsAffectation(AppUser homme, ServiceVehicle voiture,
                                              LocalDateTime depart, LocalDateTime retour,
                                              String excludeId) {
+        List<String> conflits = new ArrayList<>();
         Occupation prise = occupation(depart, retour, excludeId);
         String hommeMotif = prise.hommes().get(homme.getId().toString());
         if (hommeMotif != null) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "Le technicien « " + homme.getName() + " » n'est pas libre : " + hommeMotif
-                            + ". Choisissez un autre homme ou une autre période.");
+            conflits.add("Technicien « " + homme.getName() + " » : " + hommeMotif);
         }
         String voitureMotif = prise.voitures().get(voiture.getId());
         if (voitureMotif != null) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "La voiture « " + voiture.getRegistration() + " » n'est pas libre : "
-                            + voitureMotif + ". Choisissez-en une autre.");
+            conflits.add("Voiture « " + voiture.getRegistration() + " » : " + voitureMotif);
         }
+        return conflits;
+    }
+
+    /** Un dossier accepté malgré un conflit laisse une trace : qui, quand, et quoi. */
+    private void noterConflits(MissionGroupDossier dossier, List<String> conflits,
+                               String geste, Jwt jwt) {
+        if (conflits.isEmpty()) {
+            return;
+        }
+        audit.record("CONFLICT_ACCEPTED", "MISSION_GROUP_DOSSIER", dossier.getId(),
+                "Dossier " + dossier.getNumber() + " " + geste + " malgré : "
+                        + String.join(" ; ", conflits), jwt);
     }
 
     /**

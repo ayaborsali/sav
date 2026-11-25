@@ -216,6 +216,10 @@ public class SecurityConfig {
                     // listes ouvertes à n'importe quel compte connecté.
                     .requestMatchers(HttpMethod.GET, "/api/vehicles/**", "/api/clients/**")
                         .hasAnyRole("ADMIN", "GESTIONNAIRE_SAV", "CHEF_ATELIER")
+                    // L'atelier peut créer le client absent au moment de préparer une mission,
+                    // sans recevoir pour autant le droit de modifier ou supprimer la fiche.
+                    .requestMatchers(HttpMethod.POST, "/api/clients")
+                        .hasAnyRole("ADMIN", "GESTIONNAIRE_SAV", "CHEF_ATELIER")
                     .requestMatchers(HttpMethod.GET, "/api/**").authenticated()
                     .requestMatchers("/api/**").hasAnyRole("ADMIN", "GESTIONNAIRE_SAV")
                     .anyRequest().denyAll();

@@ -62,6 +62,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.contains;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -853,6 +855,8 @@ class MissionGroupServiceTest {
 
         assertEquals(List.of(TECH_ID), dispo.busyTechnicianUserIds());
         assertEquals(List.of("sv-1"), dispo.busyServiceVehicleIds());
+        assertEquals("déjà sur le dossier 1740", dispo.busyTechnicianReasons().get(TECH_ID));
+        assertEquals("déjà sur le dossier 1740", dispo.busyServiceVehicleReasons().get("sv-1"));
     }
 
     @Test
@@ -939,34 +943,63 @@ class MissionGroupServiceTest {
     }
 
     @Test
-    void enregistrer_refuse_un_homme_dehors_sur_une_sortie() {
-        portefeuilleSansBus();
+    void enregistrer_accepte_un_homme_dehors_sur_une_sortie_et_note_le_conflit() {
+        portefeuilleComplet();
         when(interventions.findByStatusInOrderByReportedAtDesc(InterventionStatus.OPEN))
                 .thenReturn(List.of(sortieOuverte("DP-2026-012", InterventionStatus.DISPATCHED)));
         when(technicians.findAllById(List.of("tec-9"))).thenReturn(List.of(ficheTechnicien()));
 
-        ResponseStatusException refus = assertThrows(ResponseStatusException.class,
-                () -> service().creer(demande("1740", "cli-1"), jeton("usr-chef"), chef()));
+        service().creer(demande("1740", "cli-1"), jeton("usr-chef"), chef());
 
-        assertEquals(HttpStatus.CONFLICT, refus.getStatusCode());
-        assertTrue(refus.getReason().contains("DP-2026-012"));
-        verify(dossiers, never()).save(any());
+        verify(dossiers).save(any(MissionGroupDossier.class));
+        verify(audit).record(eq("CONFLICT_ACCEPTED"), eq("MISSION_GROUP_DOSSIER"), any(),
+                contains("DP-2026-012"), any());
     }
 
     @Test
-    void enregistrer_refuse_une_voiture_que_l_atelier_garde_ou_qui_est_en_panne() {
-        portefeuilleSansBus();
+    void enregistrer_accepte_une_voiture_a_l_atelier_et_note_le_conflit() {
+        portefeuilleComplet();
         ServiceVehicle aLAtelier = voiture();
         aLAtelier.setStatus(ServiceVehicleStatus.AT_WORKSHOP);
+        when(serviceVehicles.findByIdForUpdate("sv-1")).thenReturn(Optional.of(aLAtelier));
         when(serviceVehicles.findByActiveTrueAndStatusInOrderByRegistrationAsc(any()))
                 .thenReturn(List.of(aLAtelier));
 
-        ResponseStatusException refus = assertThrows(ResponseStatusException.class,
-                () -> service().creer(demande("1740", "cli-1"), jeton("usr-chef"), chef()));
+        service().creer(demande("1740", "cli-1"), jeton("usr-chef"), chef());
 
-        assertEquals(HttpStatus.CONFLICT, refus.getStatusCode());
-        assertTrue(refus.getReason().contains("à l'atelier"));
-        verify(dossiers, never()).save(any());
+        verify(dossiers).save(any(MissionGroupDossier.class));
+        verify(audit).record(eq("CONFLICT_ACCEPTED"), eq("MISSION_GROUP_DOSSIER"), any(),
+                contains("à l'atelier"), any());
+    }
+
+    @Test
+    void enregistrer_accepte_une_voiture_en_panne_et_note_le_conflit() {
+        portefeuilleComplet();
+        ServiceVehicle enPanne = voiture();
+        enPanne.setStatus(ServiceVehicleStatus.OUT_OF_ORDER);
+        when(serviceVehicles.findByIdForUpdate("sv-1")).thenReturn(Optional.of(enPanne));
+        when(serviceVehicles.findByActiveTrueAndStatusInOrderByRegistrationAsc(any()))
+                .thenReturn(List.of(enPanne));
+
+        service().creer(demande("1740", "cli-1"), jeton("usr-chef"), chef());
+
+        verify(dossiers).save(any(MissionGroupDossier.class));
+        verify(audit).record(eq("CONFLICT_ACCEPTED"), eq("MISSION_GROUP_DOSSIER"), any(),
+                contains("en panne"), any());
+    }
+
+    @Test
+    void enregistrer_accepte_un_chevauchement_de_mission_et_note_le_conflit() {
+        portefeuilleComplet();
+        when(dossiers.findAll()).thenReturn(List.of(dossierSurLaPeriode("mgd-2", TECH_ID, "sv-1",
+                LocalDateTime.of(2026, 11, 11, 8, 0),
+                LocalDateTime.of(2026, 11, 11, 18, 0))));
+
+        service().creer(demande("1740", "cli-1"), jeton("usr-chef"), chef());
+
+        verify(dossiers).save(any(MissionGroupDossier.class));
+        verify(audit).record(eq("CONFLICT_ACCEPTED"), eq("MISSION_GROUP_DOSSIER"), any(),
+                contains("déjà sur le dossier 1740"), any());
     }
 
     @Test
@@ -1232,7 +1265,7 @@ class MissionGroupServiceTest {
     }
 
     @Test
-    void rouvrir_refuse_si_l_homme_a_ete_pris_entre_temps() {
+    void rouvrir_accepte_un_conflit_survenu_entre_temps_et_le_note() {
         MissionGroupDossier annule = dossierPrepare();
         annule.setPlannedReturnAt(LocalDateTime.of(2026, 11, 11, 18, 0));
         annule.setCancelledAt(LocalDateTime.of(2026, 11, 10, 10, 0));
@@ -1241,17 +1274,16 @@ class MissionGroupServiceTest {
                 LocalDateTime.of(2026, 11, 11, 8, 0), LocalDateTime.of(2026, 11, 11, 18, 0));
         when(dossiers.findById("mgd-1")).thenReturn(Optional.of(annule));
         when(dossiers.findAll()).thenReturn(List.of(annule, autre));
+        when(users.findByIdForUpdate(UUID.fromString(TECH_ID))).thenReturn(Optional.of(homme()));
+        when(serviceVehicles.findByIdForUpdate("sv-1")).thenReturn(Optional.of(voiture()));
 
-        ResponseStatusException refus = assertThrows(ResponseStatusException.class,
-                () -> service().rouvrir("mgd-1", jeton("usr-chef"), chef()));
+        service().rouvrir("mgd-1", jeton("usr-chef"), chef());
 
-        assertEquals(HttpStatus.CONFLICT, refus.getStatusCode());
-        assertTrue(refus.getReason().contains("n'est plus libre"), refus.getReason());
-        assertTrue(refus.getReason().contains("corrigez l'homme ou la voiture"),
-                "le refus indique le chemin : corriger, puis rouvrir — " + refus.getReason());
-        assertNotNull(annule.getCancelledAt(), "le dossier reste annulé");
-        verify(dossiers, never()).save(any());
-        verify(push, never()).annoncer(any(), any());
+        assertNull(annule.getCancelledAt());
+        verify(dossiers).save(annule);
+        verify(audit).record(eq("CONFLICT_ACCEPTED"), eq("MISSION_GROUP_DOSSIER"), eq("mgd-1"),
+                contains("déjà sur le dossier 1740"), any());
+        verify(push).annoncer(any(), any());
     }
 
     @Test

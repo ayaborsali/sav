@@ -187,7 +187,9 @@ class MissionGroupControllerTest {
         LocalDateTime retour = LocalDateTime.of(2026, 11, 11, 18, 0);
         Authentication auth = chef();
         var rendu = new tn.higer.sav_backend.dto.MissionGroupDtos.AvailabilityResponse(
-                List.of("usr-1"), List.of("sv-1"));
+                List.of("usr-1"), List.of("sv-1"),
+                java.util.Map.of("usr-1", "déjà sur le dossier 1740"),
+                java.util.Map.of("sv-1", "déjà sur le dossier 1740"));
         when(service.disponibilites(depart, retour, "mgd-1", auth)).thenReturn(rendu);
 
         assertSame(rendu, new MissionGroupController(service)

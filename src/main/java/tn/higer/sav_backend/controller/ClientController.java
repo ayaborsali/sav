@@ -24,8 +24,9 @@ import java.util.UUID;
 
 /**
  * CRUD des clients.
- * Lecture : tous les rôles connectés (règle générique GET /api/**).
- * Écriture : admin + gestionnaire_sav (règle générique /api/** — consultation bloquée).
+ * Lecture : guichet et atelier. Création : admin, gestionnaire_sav et chef d'atelier,
+ * pour ajouter un client absent pendant la préparation d'une mission. Modification
+ * et suppression restent réservées à admin et gestionnaire_sav.
  * La liste est paginée (Page standard Spring Data). Les écritures sont auditées.
  */
 @RestController

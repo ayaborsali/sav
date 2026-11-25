@@ -9,6 +9,7 @@ import jakarta.validation.constraints.Size;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Les aller-retours de l'écran Mission groupe.
@@ -183,13 +184,14 @@ public final class MissionGroupDtos {
                                   String createdBy, String createdAt) {}
 
     /**
-     * Ce qui est déjà pris sur une période : les identifiants des hommes et des
-     * voitures engagés sur une mission non rentrée dont la période estimée
-     * chevauche celle que l'atelier prépare. L'écran retire ces lignes de ses
-     * listes ; il n'a pas à recalculer le chevauchement.
+     * Ce qui est déjà pris sur une période, avec le motif à afficher. Ces choix
+     * restent visibles et sélectionnables : l'atelier peut enregistrer malgré le
+     * chevauchement, qui sera conservé au journal de contrôle.
      */
     public record AvailabilityResponse(List<String> busyTechnicianUserIds,
-                                       List<String> busyServiceVehicleIds) {}
+                                       List<String> busyServiceVehicleIds,
+                                       Map<String, String> busyTechnicianReasons,
+                                       Map<String, String> busyServiceVehicleReasons) {}
 
     /** Une ligne de l'historique d'un bus : ce qui a été fait, quand, et sur quel dossier. */
     public record HistoryRow(String dossierId, String number, String departedAt,
