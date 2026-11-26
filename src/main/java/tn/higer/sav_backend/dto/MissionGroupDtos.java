@@ -61,9 +61,14 @@ public final class MissionGroupDtos {
      *
      * La fiche atelier s'écrit ici, une ligne par chose à faire : c'est l'atelier
      * qui sait ce qu'il y a à vérifier sur place, et l'homme coche.
+     *
+     * Le client est soit choisi au portefeuille ({@code clientId}), soit saisi à la
+     * main quand il n'y est pas : {@code clientName} est alors obligatoire, avec son
+     * adresse, sa ville et son téléphone — c'est avec eux que l'homme appelle et
+     * trace son itinéraire. Un client du portefeuille garde, lui, sa fiche.
      */
     public record DossierRequest(@Size(max = 40) String number,
-                                 @NotBlank @Size(max = 64) String clientId,
+                                 @Size(max = 64) String clientId,
                                  @NotNull LocalDateTime plannedDepartureAt,
                                  @NotBlank @Size(max = 64) String technicianUserId,
                                  @NotBlank @Size(max = 64) String serviceVehicleId,
@@ -72,7 +77,23 @@ public final class MissionGroupDtos {
                                  @Size(max = 40) String callChannel,
                                  LocalDateTime plannedReturnAt,
                                  @PositiveOrZero Long plannedDepartureMileage,
-                                 @PositiveOrZero Long plannedReturnMileage) {}
+                                 @PositiveOrZero Long plannedReturnMileage,
+                                 @Size(max = 255) String clientName,
+                                 @Size(max = 255) String clientAddress,
+                                 @Size(max = 255) String clientCity,
+                                 @Size(max = 255) String clientPhone) {
+
+        /** Constructeur historique : un client du portefeuille, sans coordonnées saisies. */
+        public DossierRequest(String number, String clientId, LocalDateTime plannedDepartureAt,
+                              String technicianUserId, String serviceVehicleId,
+                              List<BusLineRequest> buses, List<String> checklist,
+                              String callChannel, LocalDateTime plannedReturnAt,
+                              Long plannedDepartureMileage, Long plannedReturnMileage) {
+            this(number, clientId, plannedDepartureAt, technicianUserId, serviceVehicleId,
+                    buses, checklist, callChannel, plannedReturnAt,
+                    plannedDepartureMileage, plannedReturnMileage, null, null, null, null);
+        }
+    }
 
     /**
      * Le départ réel, pointé devant la voiture : l'heure, puis deux photos

@@ -234,14 +234,8 @@ public class MissionGroupService {
     @Transactional
     public DossierResponse creer(DossierRequest request, Jwt jwt, Authentication auth) {
         requirePreparer(auth);
-        String clientId = trim(request.clientId());
-        if (clientId == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Choisissez le client dans le portefeuille : un dossier sans client ne se relit pas.");
-        }
-        Client client = clients.findById(clientId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "Ce client n'est pas au portefeuille : rechoisissez-le dans la liste."));
+        ClientDuDossier client = clientDuDossier(request);
+        String clientId = client.id();
 
         AppUser homme = findTechnician(request.technicianUserId());
         ServiceVehicle voiture = findVehicle(request.serviceVehicleId());
@@ -268,10 +262,10 @@ public class MissionGroupService {
         dossier.setId("mgd-" + UUID.randomUUID());
         dossier.setNumber(number);
         dossier.setClientId(clientId);
-        dossier.setClientName(client.getName());
-        dossier.setClientAddress(trim(client.getAddress()));
-        dossier.setClientCity(trim(client.getCity()));
-        dossier.setClientPhone(trim(client.getPhone()));
+        dossier.setClientName(client.name());
+        dossier.setClientAddress(client.address());
+        dossier.setClientCity(client.city());
+        dossier.setClientPhone(client.phone());
         dossier.setCallChannel(canal);
         dossier.setPlannedDepartureAt(request.plannedDepartureAt());
         dossier.setPlannedReturnAt(request.plannedReturnAt());
@@ -291,7 +285,7 @@ public class MissionGroupService {
 
         audit.record("CREATE", "MISSION_GROUP_DOSSIER", dossier.getId(),
                 "Dossier " + dossier.getNumber() + " (" + ecrites.size() + " bus, fiche atelier : "
-                        + fiche.size() + " lignes) pour " + client.getName() + ", "
+                        + fiche.size() + " lignes) pour " + client.name() + ", "
                         + homme.getName() + " et la voiture " + voiture.getRegistration(), jwt);
         noterConflits(dossier, conflits, "créé", jwt);
         apresValidation(() -> prevenirAffectation(dossier, false));
@@ -328,14 +322,8 @@ public class MissionGroupService {
                             + "la correction recrée les lignes de bus et laisserait ces preuves "
                             + "sans support. Le dossier reste tel quel.");
         }
-        String clientId = trim(request.clientId());
-        if (clientId == null) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "Choisissez le client dans le portefeuille : un dossier sans client ne se relit pas.");
-        }
-        Client client = clients.findById(clientId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "Ce client n'est pas au portefeuille : rechoisissez-le dans la liste."));
+        ClientDuDossier client = clientDuDossier(request);
+        String clientId = client.id();
 
         AppUser homme = findTechnician(request.technicianUserId());
         ServiceVehicle voiture = findVehicle(request.serviceVehicleId());
@@ -360,10 +348,10 @@ public class MissionGroupService {
         LocalDateTime now = LocalDateTime.now();
         dossier.setNumber(number);
         dossier.setClientId(clientId);
-        dossier.setClientName(client.getName());
-        dossier.setClientAddress(trim(client.getAddress()));
-        dossier.setClientCity(trim(client.getCity()));
-        dossier.setClientPhone(trim(client.getPhone()));
+        dossier.setClientName(client.name());
+        dossier.setClientAddress(client.address());
+        dossier.setClientCity(client.city());
+        dossier.setClientPhone(client.phone());
         dossier.setCallChannel(canal);
         dossier.setPlannedDepartureAt(request.plannedDepartureAt());
         dossier.setPlannedReturnAt(request.plannedReturnAt());
@@ -387,7 +375,7 @@ public class MissionGroupService {
         audit.record("UPDATE", "MISSION_GROUP_DOSSIER", dossier.getId(),
                 "Dossier " + dossier.getNumber() + " modifié : " + ecrites.size()
                         + " bus, fiche atelier " + fiche.size() + " lignes, pour "
-                        + client.getName() + ", " + homme.getName() + " et la voiture "
+                        + client.name() + ", " + homme.getName() + " et la voiture "
                         + voiture.getRegistration()
                         + (dossier.getCancelledAt() == null ? ""
                         : " (dossier annulé : l'annulation reste posée)"), jwt);
@@ -944,12 +932,47 @@ public class MissionGroupService {
         }
     }
 
+    /**
+     * Le client d'un dossier, tel qu'il sera recopié sur le papier : soit celui du
+     * portefeuille (ses coordonnées sont relues sur sa fiche, sauf celles que
+     * l'atelier a corrigées pour ce déplacement), soit un client saisi à la main
+     * quand il n'est pas dans la liste. Dans ce cas le nom est obligatoire : sans
+     * lui, le dossier ne se relit pas. L'adresse et le téléphone, eux, sont ce
+     * qui permet à l'homme d'appeler et de tracer son itinéraire.
+     */
+    private ClientDuDossier clientDuDossier(DossierRequest request) {
+        String clientId = trim(request.clientId());
+        String adresse = trim(request.clientAddress());
+        String ville = trim(request.clientCity());
+        String telephone = trim(request.clientPhone());
+        if (clientId != null) {
+            Client client = clients.findById(clientId)
+                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "Ce client n'est pas au portefeuille : rechoisissez-le dans la liste."));
+            return new ClientDuDossier(clientId, client.getName(),
+                    adresse != null ? adresse : trim(client.getAddress()),
+                    ville != null ? ville : trim(client.getCity()),
+                    telephone != null ? telephone : trim(client.getPhone()));
+        }
+        String nom = trim(request.clientName());
+        if (nom == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "Choisissez le client dans le portefeuille ou écrivez son nom : "
+                            + "un dossier sans client ne se relit pas.");
+        }
+        return new ClientDuDossier(null, nom, adresse, ville, telephone);
+    }
+
+    /** Le client recopié sur le dossier ; {@code id} est vide pour un client hors portefeuille. */
+    private record ClientDuDossier(String id, String name, String address, String city, String phone) {}
+
     /** Une ligne de bus validée : le bus du portefeuille, absent quand la plaque est saisie à la main. */
     private record LigneBus(Vehicle vehicle, String registration, String description, String diagnosis) {}
 
     /**
      * Les bus d'un dossier : chacun est soit choisi dans le portefeuille du client,
-     * soit désigné par son immatriculation saisie à la main. Chacun a son problème
+     * soit désigné par son immatriculation saisie à la main (seul choix possible
+     * pour un client hors portefeuille, qui n'a pas de bus en fiche). Chacun a son problème
      * écrit et n'apparaît qu'une fois (comparé par plaque normalisée). L'écran
      * propose les bus du client ; le serveur le revérifie, parce qu'une requête
      * ne se croit pas.
@@ -974,7 +997,7 @@ public class MissionGroupService {
                 bus = vehicles.findById(busId)
                         .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
                                 "Ce bus n'est pas au portefeuille : rechoisissez-le dans la liste."));
-                if (!Objects.equals(clientId, bus.getClientId())) {
+                if (clientId == null || !Objects.equals(clientId, bus.getClientId())) {
                     throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                             "Le bus « " + bus.getRegistration() + " » n'appartient pas à ce client : "
                                     + "le dossier ne mélange pas deux portefeuilles.");
