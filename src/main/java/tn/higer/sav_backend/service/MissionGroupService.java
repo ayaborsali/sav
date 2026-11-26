@@ -76,9 +76,10 @@ import java.util.UUID;
  *
  * Le geste se fait à deux mains, et c'est le serveur qui sépare les rôles :
  * 1. l'atelier prépare le dossier — client du portefeuille, bus choisis parmi
- *    ceux du client, problème écrit bus par bus, homme et voiture affectés,
- *    départ prévu. Le numéro est proposé (1740, 1741…) mais l'agent peut le
- *    remplacer par celui du registre papier ; un numéro déjà pris est refusé ;
+ *    ceux du client (ou désignés par leur immatriculation saisie à la main),
+ *    problème écrit bus par bus, homme et voiture affectés, départ prévu. Le
+ *    numéro est proposé (1740, 1741…) mais l'agent peut le remplacer par celui
+ *    du registre papier ; un numéro déjà pris est refusé ;
  * 2. le technicien affecté pointe le départ réel (heure + kilométrage de la
  *    voiture) en versant la photo avant ; plus tard, il pointe le retour, le
  *    kilométrage et la photo après, avec le diagnostic de chaque bus. L'atelier
@@ -250,7 +251,7 @@ public class MissionGroupService {
                 request.plannedDepartureAt(), request.plannedReturnAt(), null);
         MissionCallChannel canal = canal(request.callChannel());
 
-        List<Vehicle> choisis = busesDuClient(clientId, request.buses());
+        List<LigneBus> choisis = busesDuClient(clientId, request.buses());
 
         String number = trim(request.number());
         if (number == null) {
@@ -284,7 +285,7 @@ public class MissionGroupService {
         dossier.setCreatedAt(now);
         dossiers.save(dossier);
 
-        List<MissionGroupBus> ecrites = ecrireBuses(dossier, choisis, request.buses(), now);
+        List<MissionGroupBus> ecrites = ecrireBuses(dossier, choisis, now);
 
         List<MissionGroupChecklistItem> fiche = ecrireFiche(dossier.getId(), request.checklist(), now);
 
@@ -343,7 +344,7 @@ public class MissionGroupService {
         List<String> conflits = conflitsAffectation(homme, voiture,
                 request.plannedDepartureAt(), request.plannedReturnAt(), id);
         MissionCallChannel canal = canal(request.callChannel());
-        List<Vehicle> choisis = busesDuClient(clientId, request.buses());
+        List<LigneBus> choisis = busesDuClient(clientId, request.buses());
 
         String number = trim(request.number());
         if (number == null) {
@@ -380,7 +381,7 @@ public class MissionGroupService {
         List<MissionGroupChecklistItem> ancienneFiche =
                 checklist.findByDossierIdOrderByPositionAsc(id);
         checklist.deleteAll(ancienneFiche);
-        List<MissionGroupBus> ecrites = ecrireBuses(dossier, choisis, request.buses(), now);
+        List<MissionGroupBus> ecrites = ecrireBuses(dossier, choisis, now);
         List<MissionGroupChecklistItem> fiche = ecrireFiche(id, request.checklist(), now);
 
         audit.record("UPDATE", "MISSION_GROUP_DOSSIER", dossier.getId(),
@@ -627,24 +628,22 @@ public class MissionGroupService {
     }
 
     /** Les lignes de bus d'un dossier, écrites dans l'ordre de saisie. */
-    private List<MissionGroupBus> ecrireBuses(MissionGroupDossier dossier, List<Vehicle> choisis,
-                                              List<BusLineRequest> demandes, LocalDateTime now) {
+    private List<MissionGroupBus> ecrireBuses(MissionGroupDossier dossier, List<LigneBus> lignes,
+                                              LocalDateTime now) {
         List<MissionGroupBus> ecrites = new ArrayList<>();
         int ordre = 1;
-        for (Vehicle bus : choisis) {
-            BusLineRequest ligne = demandes.stream()
-                    .filter(l -> Objects.equals(trim(l.vehicleId()), bus.getId()))
-                    .findFirst().orElseThrow();
+        for (LigneBus ligne : lignes) {
             MissionGroupBus mission = new MissionGroupBus();
             mission.setId("mgb-" + UUID.randomUUID());
             mission.setDossierId(dossier.getId());
             mission.setPosition(ordre++);
-            mission.setVehicleId(bus.getId());
-            // La plaque est recopiée du portefeuille : l'écran ne la retape jamais.
-            mission.setRegistration(bus.getRegistration());
-            mission.setRegistrationKey(cleImmatriculation(bus.getRegistration()));
-            mission.setDescription(trim(ligne.description()));
-            mission.setDiagnosis(trim(ligne.diagnosis()));
+            // Null pour une plaque saisie à la main : le bus n'est pas au portefeuille.
+            mission.setVehicleId(ligne.vehicle() == null ? null : ligne.vehicle().getId());
+            // La plaque est recopiée du portefeuille, ou telle que saisie par l'agent.
+            mission.setRegistration(ligne.registration());
+            mission.setRegistrationKey(cleImmatriculation(ligne.registration()));
+            mission.setDescription(ligne.description());
+            mission.setDiagnosis(ligne.diagnosis());
             mission.setCreatedAt(now);
             buses.save(mission);
             ecrites.add(mission);
@@ -945,41 +944,60 @@ public class MissionGroupService {
         }
     }
 
+    /** Une ligne de bus validée : le bus du portefeuille, absent quand la plaque est saisie à la main. */
+    private record LigneBus(Vehicle vehicle, String registration, String description, String diagnosis) {}
+
     /**
-     * Les bus d'un dossier, pris dans le portefeuille du client : chacun a son
-     * problème écrit et n'apparaît qu'une fois. L'écran ne propose que ceux du
-     * client ; le serveur le revérifie, parce qu'une requête ne se croit pas.
+     * Les bus d'un dossier : chacun est soit choisi dans le portefeuille du client,
+     * soit désigné par son immatriculation saisie à la main. Chacun a son problème
+     * écrit et n'apparaît qu'une fois (comparé par plaque normalisée). L'écran
+     * propose les bus du client ; le serveur le revérifie, parce qu'une requête
+     * ne se croit pas.
      */
-    private List<Vehicle> busesDuClient(String clientId, List<BusLineRequest> demandes) {
+    private List<LigneBus> busesDuClient(String clientId, List<BusLineRequest> demandes) {
         if (demandes == null || demandes.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "Un dossier groupe porte au moins un bus : ajoutez la ligne du bus travaillé.");
         }
-        List<Vehicle> choisis = new ArrayList<>();
+        List<LigneBus> choisis = new ArrayList<>();
         Set<String> dejaPris = new HashSet<>();
         for (BusLineRequest ligne : demandes) {
-            String busId = trim(ligne.vehicleId());
-            if (busId == null) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "Chaque ligne porte son bus, choisi dans ceux du client.");
-            }
-            if (trim(ligne.description()) == null) {
+            String description = trim(ligne.description());
+            if (description == null) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "Chaque bus a son problème écrit : sans lui, le dossier ne dit pas ce qu'on va faire.");
             }
-            if (!dejaPris.add(busId)) {
+            String busId = trim(ligne.vehicleId());
+            Vehicle bus = null;
+            String plaque;
+            if (busId != null) {
+                bus = vehicles.findById(busId)
+                        .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                                "Ce bus n'est pas au portefeuille : rechoisissez-le dans la liste."));
+                if (!Objects.equals(clientId, bus.getClientId())) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "Le bus « " + bus.getRegistration() + " » n'appartient pas à ce client : "
+                                    + "le dossier ne mélange pas deux portefeuilles.");
+                }
+                plaque = bus.getRegistration();
+            } else {
+                plaque = trim(ligne.registration());
+                if (plaque == null) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                            "Chaque ligne porte son véhicule : choisissez-le dans ceux du client "
+                                    + "ou écrivez son immatriculation.");
+                }
+            }
+            String cle = cleImmatriculation(plaque);
+            if (cle.isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "L'immatriculation écrite n'est pas lisible : vérifiez-la.");
+            }
+            if (!dejaPris.add(cle)) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                         "Le même bus est écrit deux fois sur ce dossier : une ligne par bus.");
             }
-            Vehicle bus = vehicles.findById(busId)
-                    .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                            "Ce bus n'est pas au portefeuille : rechoisissez-le dans la liste."));
-            if (!Objects.equals(clientId, bus.getClientId())) {
-                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "Le bus « " + bus.getRegistration() + " » n'appartient pas à ce client : "
-                                + "le dossier ne mélange pas deux portefeuilles.");
-            }
-            choisis.add(bus);
+            choisis.add(new LigneBus(bus, plaque, description, trim(ligne.diagnosis())));
         }
         return choisis;
     }

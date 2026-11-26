@@ -1,5 +1,5 @@
 package tn.higer.sav_backend.dto;
-
+import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotEmpty;
@@ -33,9 +33,23 @@ public final class MissionGroupDtos {
      * problème constaté. L'immatriculation n'est pas recopiée — le serveur la
      * relit sur la fiche du bus.
      */
-    public record BusLineRequest(@NotBlank @Size(max = 64) String vehicleId,
-                                 @NotBlank @Size(max = 4000) String description,
-                                 @Size(max = 8000) String diagnosis) {}
+    public record BusLineRequest(@Size(max = 64) String vehicleId,
+                             @NotBlank @Size(max = 4000) String description,
+                             @Size(max = 4000) String diagnosis,
+                             @Size(max = 120) String registration) {
+
+    /** Constructeur historique : un bus choisi dans le portefeuille, sans plaque libre. */
+    public BusLineRequest(String vehicleId, String description, String diagnosis) {
+        this(vehicleId, description, diagnosis, null);
+    }
+
+    @AssertTrue(message = "Choisissez un bus du client ou saisissez son immatriculation")
+    public boolean isVehicleOrRegistrationPresent() {
+        return (vehicleId != null && !vehicleId.isBlank())
+            || (registration != null && !registration.isBlank());
+    }
+
+}
 
     /**
      * Préparer le dossier. Le numéro peut rester vide : le serveur propose alors
