@@ -16,6 +16,7 @@ import tn.higer.sav_backend.dto.OrdreDtos.FicheResponse;
 import tn.higer.sav_backend.dto.OrdreDtos.ForfaitDto;
 import tn.higer.sav_backend.dto.OrdreDtos.OrigineDto;
 import tn.higer.sav_backend.model.Client;
+import tn.higer.sav_backend.model.LineNature;
 import tn.higer.sav_backend.model.MaintenanceType;
 import tn.higer.sav_backend.model.Vehicle;
 import tn.higer.sav_backend.repository.ClientRepository;
@@ -218,7 +219,7 @@ public class MaintenanceDocumentService {
                         row("Preuve", preuve(fiche.cloture())))));
                 if (fiche.cloture() != null && !fiche.cloture().pret()) {
                     boxes.add(box("Ce qui manque encore", List.of(
-                            row("Opérations à cocher", orDash(fiche.cloture().operationsNonCochees())),
+                            row("Tâches à cocher", orDash(fiche.cloture().operationsNonCochees())),
                             row("Heures à écrire", orDash(fiche.cloture().heuresManquantes())))));
                 }
             }
@@ -306,11 +307,15 @@ public class MaintenanceDocumentService {
         if (type == MaintenanceType.DEVIS) {
             tables.add(lignesDeDevis(papier));
         } else if (type == MaintenanceType.OPERATION) {
-            tables.add(lignesDOrdre(papier));
+            // Le papier de l'atelier se lit en trois blocs : les tâches (avec leur temps), les
+            // pièces (prévues, puis consommées) et les hommes du groupe d'intervention.
+            tables.add(tachesDOrdre(papier));
+            tables.add(piecesDeRechange(papier, fiche.piecesPosees()));
+            tables.add(groupeDIntervention(papier));
         } else {
             tables.add(piecesDuBon(fiche));
         }
-        if (type != MaintenanceType.DEVIS) {
+        if (type == MaintenanceType.BL) {
             tables.add(piecesPosees(fiche.piecesPosees(), type));
         }
         return tables;
@@ -342,26 +347,140 @@ public class MaintenanceDocumentService {
                 rows, "Aucune ligne sur ce devis.");
     }
 
-    /**
-     * Les lignes de l'ordre : le travail et le temps, jamais le prix. « Prévu » est le temps
-     * standard du catalogue ({@code quantityText}), « Heures réelles » ce que l'atelier a écrit —
-     * les deux colonnes côte à côte, c'est là que l'écart se lit.
-     */
-    private static Map<String, Object> lignesDOrdre(MaintenanceResponse papier) {
-        List<List<String>> rows = new ArrayList<>();
-        for (MaintenanceLineDto ligne : lignes(papier)) {
-            rows.add(List.of(
-                    orDash(ligne.reference()),
-                    orDash(ligne.label()),
-                    orDash(ligne.natureLabel()),
-                    orDash(ligne.quantityText()),
-                    ligne.done() == null ? DASH : (ligne.done() ? "Fait" : "Pas fait"),
-                    hours(ligne.realHours())));
+    /** La nature d'une ligne, lue du mot que la réponse porte (« labor », « part », « travel »). */
+    private static LineNature natureDe(MaintenanceLineDto ligne) {
+        if (ligne.nature() == null) {
+            return null;
         }
-        return table("Le travail de l'atelier, ligne par ligne — aucune colonne de prix (V38)",
-                List.of("Référence", "Opération", "Nature", "Prévu", "Fait", "Heures réelles"),
-                List.of(0.9, 2.6, 0.9, 0.7, 0.6, 0.8),
-                rows, "Aucune opération sur cet ordre.");
+        try {
+            return LineNature.valueOf(ligne.nature().trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException inconnue) {
+            return null;
+        }
+    }
+
+    /** Ce que l'atelier fait avec ses mains : la main-d'œuvre, et les lignes sans nature des vieux papiers. */
+    private static boolean estUneTache(MaintenanceLineDto ligne) {
+        LineNature nature = natureDe(ligne);
+        return nature != LineNature.PART && nature != LineNature.TRAVEL;
+    }
+
+    /**
+     * Les tâches de l'ordre : le travail et le temps, jamais le prix. « Temps alloué » est le
+     * temps standard du catalogue ({@code quantityText}), sinon les heures chiffrées au devis ;
+     * « Réalisé » ce que l'atelier a écrit — les deux colonnes côte à côte, c'est là que
+     * l'écart se lit. Les pièces et le déplacement n'y figurent pas : ils ne se « font » pas.
+     */
+    private static Map<String, Object> tachesDOrdre(MaintenanceResponse papier) {
+        List<List<String>> rows = new ArrayList<>();
+        int rang = 0;
+        for (MaintenanceLineDto ligne : lignes(papier)) {
+            if (!estUneTache(ligne)) {
+                continue;
+            }
+            rang++;
+            String reference = notBlank(ligne.reference()) ? ligne.reference().trim() : "OP-" + rang;
+            rows.add(List.of(
+                    String.valueOf(rang),
+                    notBlank(ligne.label()) ? reference + " — " + ligne.label().trim() : reference,
+                    tempsAlloue(ligne),
+                    hours(ligne.realHours()),
+                    ligne.done() == null ? DASH : (ligne.done() ? "Fait" : "Pas fait")));
+        }
+        return table("Travaux à effectuer",
+                List.of("N°", "Tâches", "Temps alloué", "Réalisé", "Observations"),
+                List.of(0.4, 3.2, 0.9, 0.8, 1.0),
+                rows, "Aucune tâche sur cet ordre.");
+    }
+
+    /** Le temps du catalogue s'il est écrit, sinon les heures chiffrées de la main-d'œuvre. */
+    private static String tempsAlloue(MaintenanceLineDto ligne) {
+        if (notBlank(ligne.quantityText())) {
+            return ligne.quantityText().trim();
+        }
+        if (natureDe(ligne) == LineNature.LABOR && ligne.quantity() != null && ligne.quantity() > 0) {
+            return quantity(ligne.quantity()) + " h";
+        }
+        return DASH;
+    }
+
+    /**
+     * Les pièces de l'ordre : ce que le devis prévoyait, et ce qui a vraiment été posé. Une
+     * pièce posée qui n'était pas prévue s'imprime quand même — « prévue » vide, « consommée »
+     * remplie — parce que l'écart se lit là. La case « consommée » reste vide tant que rien n'a
+     * été posé : le zéro est une décision.
+     */
+    private static Map<String, Object> piecesDeRechange(MaintenanceResponse papier,
+                                                        List<ItemPartResponse> posees) {
+        Map<String, Double> consommees = new LinkedHashMap<>();
+        Map<String, ItemPartResponse> premieres = new LinkedHashMap<>();
+        List<ItemPartResponse> sansReference = new ArrayList<>();
+        if (posees != null) {
+            for (ItemPartResponse piece : posees) {
+                String cle = cleDePiece(piece.reference());
+                if (cle.isEmpty()) {
+                    sansReference.add(piece);
+                    continue;
+                }
+                consommees.merge(cle, piece.quantity() == null ? 0.0 : piece.quantity(), Double::sum);
+                premieres.putIfAbsent(cle, piece);
+            }
+        }
+        List<List<String>> rows = new ArrayList<>();
+        java.util.Set<String> prevues = new java.util.HashSet<>();
+        int rang = 0;
+        for (MaintenanceLineDto ligne : lignes(papier)) {
+            if (natureDe(ligne) != LineNature.PART) {
+                continue;
+            }
+            rang++;
+            String cle = cleDePiece(ligne.reference());
+            Double consommee = cle.isEmpty() ? null : consommees.get(cle);
+            if (!cle.isEmpty()) {
+                prevues.add(cle);
+            }
+            rows.add(List.of(String.valueOf(rang), orDash(ligne.label()), orDash(ligne.reference()),
+                    quantity(ligne.quantity()), consommee == null ? "" : quantity(consommee)));
+        }
+        for (Map.Entry<String, Double> posee : consommees.entrySet()) {
+            if (prevues.contains(posee.getKey())) {
+                continue;
+            }
+            ItemPartResponse piece = premieres.get(posee.getKey());
+            rang++;
+            rows.add(List.of(String.valueOf(rang), orDash(piece.designation()), orDash(piece.reference()),
+                    DASH, quantity(posee.getValue())));
+        }
+        for (ItemPartResponse piece : sansReference) {
+            rang++;
+            rows.add(List.of(String.valueOf(rang), orDash(piece.designation()), DASH, DASH,
+                    quantity(piece.quantity())));
+        }
+        return table("Pièces de rechange",
+                List.of("N°", "Désignation", "Référence", "Prévue", "Consommée"),
+                List.of(0.4, 3.0, 1.2, 0.8, 0.9),
+                rows, "Aucune pièce sur cet ordre.");
+    }
+
+    private static String cleDePiece(String reference) {
+        return reference == null ? "" : reference.trim().toUpperCase(Locale.ROOT);
+    }
+
+    /**
+     * Le groupe d'intervention : l'homme nommé sur le papier, puis des lignes laissées vides pour
+     * ceux qui l'ont aidé — l'ordre ne garde qu'un technicien, et une case que personne n'a
+     * remplie reste vide.
+     */
+    private static Map<String, Object> groupeDIntervention(MaintenanceResponse papier) {
+        List<List<String>> rows = new ArrayList<>();
+        boolean nomme = notBlank(papier.technician());
+        rows.add(List.of("1", nomme ? papier.technician().trim() : "", nomme ? "Technicien" : ""));
+        rows.add(List.of("2", "", ""));
+        rows.add(List.of("3", "", ""));
+        return table("Groupe d'intervention",
+                List.of("N°", "Nom et prénom", "Fonction"),
+                List.of(0.4, 3.0, 1.6),
+                rows, "");
     }
 
     /** Les pièces et fluides que Saphir a fournis, repris des lignes du travail (bloc du BL). */

@@ -340,8 +340,9 @@ class LeOrdreSeClotEnBaseTest {
     // ------------------------------------------------------------------------------ les essais
 
     /**
-     * Rien de coché : le refus nomme les deux lignes, et aucune colonne de la clôture
-     * n'est écrite. Un refus muet laisserait l'atelier relire son papier ligne par ligne.
+     * Rien de coché : le refus nomme la tâche, et aucune colonne de la clôture n'est
+     * écrite. Un refus muet laisserait l'atelier relire son papier ligne par ligne. La pièce
+     * ne se coche pas : elle se pose, et elle n'est donc jamais réclamée à la clôture.
      */
     @Test
     void cloturer_sans_rien_cocher_refuse_et_nomme_chaque_ligne() {
@@ -352,7 +353,7 @@ class LeOrdreSeClotEnBaseTest {
 
         String motif = refus.getReason();
         assertTrue(motif.contains("Vidange et contrôle des niveaux"), motif);
-        assertTrue(motif.contains("Filtre à huile"), motif);
+        assertFalse(motif.contains("Filtre à huile"), "une pièce n'est pas une tâche à cocher : " + motif);
         assertTrue(motif.contains("non cochée"), motif);
         assertEquals("DRAFT", relirePapier(papier.getId()).get("status"), "le refus ne fait pas avancer le papier");
         assertNull(relirePapier(papier.getId()).get("closed_on"), "et n'écrit aucune date de clôture");
@@ -538,7 +539,8 @@ class LeOrdreSeClotEnBaseTest {
 
         EtatClotureDto d_abord = ordre.etatDeCloture(papier.getId());
         assertFalse(d_abord.pret(), d_abord.message());
-        assertEquals(2, d_abord.operationsNonCochees().size(), d_abord.ceQuiManque().toString());
+        assertEquals(1, d_abord.operationsNonCochees().size(),
+                "seule la tâche se coche, pas la pièce : " + d_abord.ceQuiManque());
         assertFalse(d_abord.justificatif().photoApresDeLaSortie());
 
         Intervention sortie = sortieNeuve(papier);

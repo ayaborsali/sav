@@ -43,6 +43,8 @@ SECTION = re.compile(
 )
 STOP = re.compile(
     r"^(?:signatures?|diagnostic(?:\s*[/&-]\s*observations?)?|observations?|"
+    r"pieces?\s+de\s+rechange|groupe\s+d'intervention|ce\s+qui\s+est\s+ecrit\s+sur\s+le\s+papier|"
+    r"anomalies(?:\s+constatees.*)?|raison\s+ecrite.*|etat\s+de\s+la\s+cloture|"
     r"remarques?|commentaires?|validation|visa|reception|compte[- ]rendu)"
     r"(?:\s+(?:du|de la|de|des)\s+[^:]+)?\s*(?::.*)?$"
 )
@@ -53,6 +55,14 @@ META = re.compile(
 )
 TITLE = re.compile(r"^(?:fiche atelier|fiche (?:de )?(?:travail|intervention)|ordre de travail|"
                    r"document de (?:test|travail)|check[- ]?list|feuille de travaux)(?:\b.*)?$")
+# L'ordre de travail imprimé par le serveur : « N° | Tâches | Temps alloué | Réalisé | Observations ».
+# Son en-tête n'est pas une tâche, le numéro de ligne n'en fait pas partie, et les trois colonnes
+# de droite (temps alloué, réalisé, observations) non plus.
+ORDER_HEADER = re.compile(r"^n[°º]?\s+taches\s+temps\s+alloue\b.*$")
+ORDER_COLUMNS = re.compile(
+    r"(?:^|\s+)(?:—|-|\d[\d.,]*\s*(?:h|min|j)?)\s+(?:—|-|\d+,\d{2})\s+(?:—|-|fait|pas fait)$",
+    re.IGNORECASE)
+ORDER_ROW = re.compile(r"^\d+\s+\S")
 PAGE = re.compile(r"^(?:page\s*)?\d+\s*(?:/|sur)\s*\d+$|^page\s+\d+$|^[-–—]\s*\d+\s*[-–—]$")
 CHECK = r"(?:\[\s*[xX✓✔]?\s*\]|\(\s*[xX✓✔]?\s*\)|[☐☑☒□■✓✔√])"
 MARKER = re.compile(r"^\s*(?:" + CHECK + r"|[•●◦▪‣⁃*\-–—]|(?:\d+(?:\.\d+)*|[a-zA-Z])\s*[.)]|\(\d+\))\s*")
@@ -111,6 +121,7 @@ def parse_tasks(pages):
     active = not has_sections
     stopped = False
     table = False
+    ordre = False
     status_last = False
     pending = None
     pending_indent = 0
@@ -136,13 +147,17 @@ def parse_tasks(pages):
             continue
         if SECTION.fullmatch(key):
             flush()
-            active, stopped, table = True, False, False
+            active, stopped, table, ordre = True, False, False, False
             continue
         if STOP.fullmatch(key):
             flush()
-            active, stopped, table = False, True, False
+            active, stopped, table, ordre = False, True, False, False
             continue
         if META.match(key) or TITLE.match(key) or PAGE.fullmatch(key) or re.fullmatch(r"[\W_]+", text):
+            continue
+        if ORDER_HEADER.match(key):
+            flush()
+            ordre = True
             continue
         if table_header(text):
             flush()
@@ -157,12 +172,20 @@ def parse_tasks(pages):
             continue
         if stopped or not active:
             continue
+        if ordre:
+            text = ORDER_COLUMNS.sub("", text).strip()
+            if not text:
+                continue
         marker = MARKER.match(text)
         if marker:
             flush()
             while marker:
                 text = text[marker.end():].strip()
                 marker = MARKER.match(text)
+            marked = True
+        elif ordre and ORDER_ROW.match(text):
+            flush()
+            text = re.sub(r"^\d+\s+", "", text)
             marked = True
         elif table and re.match(r"^[xX]\s+", text):
             flush()

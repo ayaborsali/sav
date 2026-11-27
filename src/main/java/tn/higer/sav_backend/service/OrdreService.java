@@ -381,8 +381,18 @@ public class OrdreService {
                     + " les lignes du devis dont il est né, ou annulez-le");
         }
         int numeroDeLigne = 0;
+        int taches = 0;
         for (MaintenanceDetail ligne : ordre.getDetails()) {
             numeroDeLigne++;
+            // Ce qui se coche, c'est une TÂCHE de l'atelier : la main-d'œuvre. Une pièce se
+            // pose — sa quantité consommée s'écrit aux pièces posées — et un déplacement se
+            // paie au forfait de sortie : les cocher n'avait aucun sens et obligeait l'atelier
+            // à cocher des lignes artificielles pour clôturer. Une ligne sans nature — les
+            // papiers nés avant V36 — reste une tâche, comme avant.
+            if (ligne.getNature() == LineNature.PART || ligne.getNature() == LineNature.TRAVEL) {
+                continue;
+            }
+            taches++;
             String nom = nomDe(ligne, numeroDeLigne);
             if (!Boolean.TRUE.equals(ligne.getDone())) {
                 nonCochees.add(nom);
@@ -397,6 +407,11 @@ public class OrdreService {
                     && (ligne.getRealHours() == null || ligne.getRealHours() <= 0)) {
                 heures.add(nom);
             }
+        }
+
+        if (!ordre.getDetails().isEmpty() && taches == 0) {
+            raisons.add("ce papier n'a aucune tâche de main-d'œuvre : il ne porte que des pièces ou un"
+                    + " déplacement, donc rien à cocher — ajoutez la tâche qui a été faite, ou annulez-le");
         }
 
         Mission mission = missionDe(ordre);
@@ -540,7 +555,8 @@ public class OrdreService {
         return bl.getSignedOn() == null ? "" : " le " + bl.getSignedOn();
     }
 
-    private MaintenanceItem ordreDe(String id) {        MaintenanceItem papier = documents.findById(id)
+    private MaintenanceItem ordreDe(String id) {
+        MaintenanceItem papier = documents.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
                         "Document de maintenance introuvable."));
         if (papier.getType() != MaintenanceType.OPERATION) {

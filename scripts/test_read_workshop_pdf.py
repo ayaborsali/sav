@@ -85,6 +85,69 @@ class WorkshopPdfTest(unittest.TestCase):
             parse_tasks([["FICHE ATELIER", "Client : Exemple", "Date : demain", "Signature du technicien : ..."]])
         self.assertEqual(error.exception.kind, "no_tasks")
 
+    def test_printed_work_order_only_yields_the_tasks(self):
+        # L'ordre de travail imprimé par le serveur : trois tableaux, des titres, un pied de page.
+        tasks = parse_tasks([[
+            "Le papier", "Tâches à cocher MO-1",
+            "Travaux à effectuer",
+            "N° Tâches Temps alloué Réalisé Observations",
+            "1 OP-1 — Vidange moteur 0,9 h 1,25 Fait",
+            "2 OP-2 — Dépose boîte de vitesses — — —",
+            "3 OP-3 — Contrôle des niveaux et des fuites",
+            "Visibles sur le compartiment",
+            "Pièces de rechange",
+            "N° Désignation Référence Prévue Consommée",
+            "Aucune pièce sur cet ordre.",
+            "Groupe d'intervention",
+            "N° Nom et prénom Fonction",
+            "1 Yassine Ben Salem Technicien", "2", "3",
+            "Ce qui est écrit sur le papier", "Sachs et roulement pilote volant moteur.",
+            "Anomalies constatées sur le bus pendant le travail",
+            "Rien n'a été écrit pour cette partie.",
+        ]])
+        self.assertEqual(tasks, [
+            "OP-1 — Vidange moteur",
+            "OP-2 — Dépose boîte de vitesses",
+            "OP-3 — Contrôle des niveaux et des fuites Visibles sur le compartiment",
+        ])
+
+    def test_real_printed_work_order_pdf(self):
+        import json
+        import subprocess
+        import sys
+        payload = {
+            "kind": "Ordre de travail", "type": "operation", "brand": "Saphir", "brand_lines": ["Sousse"],
+            "subtitle": "Ordre de travail", "number": "OR-1", "status_label": "État : À faire",
+            "date_label": "Édité le 27/11/2026", "badge": "Papier interne", "boxes": [],
+            "tables": [
+                {"heading": "Travaux à effectuer",
+                 "columns": ["N°", "Tâches", "Temps alloué", "Réalisé", "Observations"],
+                 "weights": [0.4, 3.2, 0.9, 0.8, 1.0],
+                 "rows": [["1", "OP-1 — Vidange moteur", "0,9 h", "1,25", "Fait"],
+                          ["2", "MO-MEC-01 — Main d'œuvre qualification constructeur (6h)", "—", "—", "—"]],
+                 "note": "Aucune tâche sur cet ordre."},
+                {"heading": "Pièces de rechange",
+                 "columns": ["N°", "Désignation", "Référence", "Prévue", "Consommée"],
+                 "weights": [0.4, 3.0, 1.2, 0.8, 0.9], "rows": [], "note": "Aucune pièce sur cet ordre."},
+                {"heading": "Groupe d'intervention", "columns": ["N°", "Nom et prénom", "Fonction"],
+                 "weights": [0.4, 3.0, 1.6],
+                 "rows": [["1", "Yassine Ben Salem", "Technicien"], ["2", "", ""], ["3", "", ""]], "note": ""},
+            ],
+            "texts": [{"heading": "Ce qui est écrit sur le papier", "body": "Sachs et roulement."}],
+            "signatures": [{"name": "Yassine Ben Salem", "label": "L'atelier"}],
+            "footer": "Saphir — aucun montant ne figure sur ce papier",
+        }
+        with tempfile.TemporaryDirectory() as folder:
+            out = Path(folder) / "ordre.pdf"
+            subprocess.run([sys.executable, str(Path(__file__).with_name("render_maintenance_pdf.py")),
+                            "--out", str(out)], input=json.dumps(payload).encode("utf-8"), check=True,
+                           capture_output=True)
+            preview = read_pdf(out)
+        self.assertEqual(preview["tasks"], [
+            "OP-1 — Vidange moteur",
+            "MO-MEC-01 — Main d'œuvre qualification constructeur (6h)",
+        ])
+
 
 if __name__ == "__main__":
     unittest.main()

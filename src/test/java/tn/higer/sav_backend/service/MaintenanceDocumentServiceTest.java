@@ -257,14 +257,61 @@ class MaintenanceDocumentServiceTest {
         assertTrue(badge(plan).contains("ne le facture pas"), badge(plan));
         assertTrue(footer(plan).contains("aucun montant"), footer(plan));
 
-        // Ce que l'ordre imprime à la place du prix : le temps prévu et le temps réel.
-        assertEquals(List.of("Référence", "Opération", "Nature", "Prévu", "Fait", "Heures réelles"),
+        // Ce que l'ordre imprime à la place du prix : le temps alloué et le temps réalisé.
+        assertEquals(List.of("N°", "Tâches", "Temps alloué", "Réalisé", "Observations"),
                 colonnes(plan).get(0));
-        assertEquals("0,9 h", lignesDeTable(plan, 0).get(0).get(3));
-        assertEquals("1,25", lignesDeTable(plan, 0).get(0).get(5));
-        assertEquals(List.of("Référence", "Désignation", "Quantité", "Posée le", "Devenue"),
+        assertEquals("OP-1 — Vidange moteur", lignesDeTable(plan, 0).get(0).get(1));
+        assertEquals("0,9 h", lignesDeTable(plan, 0).get(0).get(2));
+        assertEquals("1,25", lignesDeTable(plan, 0).get(0).get(3));
+        assertEquals("Fait", lignesDeTable(plan, 0).get(0).get(4));
+        assertEquals(List.of("N°", "Désignation", "Référence", "Prévue", "Consommée"),
                 colonnes(plan).get(1));
-        assertEquals("retournée — remboursement AG", lignesDeTable(plan, 1).get(0).get(4));
+        assertEquals(List.of("N°", "Nom et prénom", "Fonction"), colonnes(plan).get(2));
+    }
+
+    /**
+     * Les tâches et les pièces ne se mélangent plus : la main-d'œuvre se lit en tâches numérotées
+     * avec son temps, les pièces dans leur tableau (prévue / consommée), et le déplacement dans
+     * aucun des deux — il ne se « fait » pas.
+     */
+    @Test
+    void lordreSepareLesTachesDesPiecesEtOublieLeDeplacement() {
+        MaintenanceLineDto depose = new MaintenanceLineDto(null, "Dépose boîte de vitesses", 2.5, null, null,
+                "labor", "saphir", "Main-d'œuvre", "Saphir", null, null, null);
+        MaintenanceLineDto kit = new MaintenanceLineDto("SA-884", "Roulement pilote", 1.0, null, null,
+                "part", "saphir", "Pièce", "Saphir", null, null, null);
+        MaintenanceLineDto plaquette = new MaintenanceLineDto("TEST-010", "Plaquette de frein AV", 2.0, null, null,
+                "part", "saphir", "Pièce", "Saphir", null, null, null);
+        MaintenanceLineDto trajet = new MaintenanceLineDto(null, "Déplacement", 1.0, null, null,
+                "travel", null, "Déplacement", null, null, null, null);
+        MaintenanceResponse ordre = papier("operation", "OR-2026-0216", "draft", null, null,
+                List.of(depose, kit, plaquette, trajet), null, null, null, null,
+                null, null, null, null, null, null, null, null, null);
+        ItemPartResponse posee = new ItemPartResponse("ip-9", PAPIER_ID, "veh-1", null, "sa-884 ",
+                "Roulement pilote", 1.0, LocalDate.of(2026, 11, 26), false, null, null);
+        ItemPartResponse horsDevis = new ItemPartResponse("ip-10", PAPIER_ID, "veh-1", null, "JT-1",
+                "Joint spi", 3.0, LocalDate.of(2026, 11, 26), false, null, null);
+
+        Map<String, Object> plan = serviceAvec(new FicheResponse(ordre, null, null,
+                List.of(), List.of(posee, horsDevis), null, null)).payload(PAPIER_ID);
+
+        // Une seule tâche : la dépose. Le temps vient des heures chiffrées, le numéro est donné.
+        assertEquals(1, lignesDeTable(plan, 0).size(), "ni les pièces ni le déplacement ne sont des tâches");
+        assertEquals(List.of("1", "OP-1 — Dépose boîte de vitesses", "2,5 h", "—", "—"),
+                lignesDeTable(plan, 0).get(0));
+
+        // Les pièces : prévues d'abord, puis la pièce posée qui n'était pas au devis.
+        assertEquals(3, lignesDeTable(plan, 1).size());
+        assertEquals(List.of("1", "Roulement pilote", "SA-884", "1", "1"), lignesDeTable(plan, 1).get(0),
+                "la référence se compare sans tenir compte de la casse ni des espaces");
+        assertEquals(List.of("2", "Plaquette de frein AV", "TEST-010", "2", ""), lignesDeTable(plan, 1).get(1),
+                "rien de posé : « consommée » reste vide, ce n'est pas un zéro");
+        assertEquals(List.of("3", "Joint spi", "JT-1", "—", "3"), lignesDeTable(plan, 1).get(2),
+                "une pièce posée hors devis s'imprime, avec « prévue » vide");
+
+        // Le groupe : l'homme nommé, puis des lignes vides.
+        assertEquals(List.of("1", "ayaborsali", "Technicien"), lignesDeTable(plan, 2).get(0));
+        assertEquals(List.of("2", "", ""), lignesDeTable(plan, 2).get(1));
     }
 
     @Test
